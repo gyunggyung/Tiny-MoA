@@ -32,15 +32,18 @@ ROUTER_SYSTEM_PROMPT = """You are a task router. Analyze the user's request and 
 
 Available specialists:
 - REASONER: For coding tasks (Python, algorithms) and math problems (calculations, proofs, AIME-style)
+- TOOL: For requests that need external/real-time information (weather, web search, current time, live data)
 - DIRECT: For general conversation, explanations, translations, and Korean language tasks
 
 Respond with a JSON object:
-{"route": "REASONER" or "DIRECT", "specialist_prompt": "prompt for specialist if REASONER, else empty"}
+{"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "prompt for specialist, else empty", "tool_hint": "tool name if TOOL route"}
 
 Examples:
-- "피보나치 함수 작성해줘" → {"route": "REASONER", "specialist_prompt": "Write a Python function for Fibonacci sequence"}
-- "안녕하세요!" → {"route": "DIRECT", "specialist_prompt": ""}
-- "1+1은?" → {"route": "REASONER", "specialist_prompt": "Calculate 1+1 and explain"}
+- "피보나치 함수 작성해줘" → {"route": "REASONER", "specialist_prompt": "Write a Python function for Fibonacci sequence", "tool_hint": ""}
+- "안녕하세요!" → {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
+- "서울 날씨 어때?" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "get_weather"}
+- "Python 검색해줘" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "search_web"}
+- "지금 몇시야?" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "get_current_time"}
 """
 
 
@@ -145,11 +148,24 @@ class Brain:
             pass
         
         # 파싱 실패 시 키워드 기반 폴백
-        keywords_reasoner = ["코드", "함수", "구현", "python", "알고리즘", "계산", "수학", "증명", "aime", "code", "function", "sum", "fibonacci"]
-        if any(kw in user_input.lower() for kw in keywords_reasoner):
-            return {"route": "REASONER", "specialist_prompt": user_input}
+        user_lower = user_input.lower()
         
-        return {"route": "DIRECT", "specialist_prompt": ""}
+        # TOOL 키워드 우선 체크 (외부 정보 필요)
+        keywords_tool = {
+            "get_weather": ["날씨", "weather", "기온", "온도", "temperature"],
+            "search_web": ["검색", "search", "찾아봐", "알려줘", "뭐야", "누구", "최신"],
+            "get_current_time": ["시간", "time", "몇시", "날짜", "date", "오늘"],
+        }
+        for tool_name, keywords in keywords_tool.items():
+            if any(kw in user_lower for kw in keywords):
+                return {"route": "TOOL", "specialist_prompt": "", "tool_hint": tool_name}
+        
+        # REASONER 키워드
+        keywords_reasoner = ["코드", "함수", "구현", "python", "알고리즘", "수학", "증명", "aime", "code", "function", "fibonacci"]
+        if any(kw in user_lower for kw in keywords_reasoner):
+            return {"route": "REASONER", "specialist_prompt": user_input, "tool_hint": ""}
+        
+        return {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
     
     def direct_respond(self, user_input: str, system_prompt: Optional[str] = None) -> str:
         """

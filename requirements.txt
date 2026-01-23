@@ -11,5 +11,13 @@ huggingface-hub>=0.25.0
 rich>=13.0.0          # CLI 출력
 pydantic>=2.0.0       # 데이터 검증
 
+# Tool Calling (선택적)
+requests>=2.31.0      # HTTP 요청
+# duckduckgo-search>=6.0  # 웹 검색 (선택)
+# python-weather>=2.0     # 날씨 API (선택)
+
 # Optional - 확장 시 설치
-# docling>=1.0.0      # 문서 파싱
+# docling>=1.0.0        # 문서 파싱
+# googletrans>=4.0.0    # 번역 (향후 확장)
+# chromadb>=0.4.0       # RAG (향후 확장)
+
