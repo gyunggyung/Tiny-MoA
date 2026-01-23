@@ -1,6 +1,6 @@
 # Tiny MoA - Git 제외 파일
 
-# Models (큰 파일)
+# Models (큰 파일 - GGUF)
 models/
 *.gguf
 
@@ -49,3 +49,12 @@ logs/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Output (생성된 결과물)
+output/
+
+# Ruff (린터 캐시)
+.ruff_cache/
+
+# Note: uv.lock은 GitHub에 올림 (의존성 잠금 파일)
+
