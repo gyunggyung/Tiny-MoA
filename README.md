@@ -1,3 +1,5 @@
+**🇰🇷 한국어** | [🇺🇸 English](README_EN.md)
+
 # 🤖 Tiny MoA (Mixture of Agents) PoC
 
 > **"GPU Poor를 위한 AI 군단"** - 4B 모델 하나 대신, 1.2B Brain + 600M 전문가 조합으로 더 나은 성능을!
@@ -297,7 +299,8 @@ def quicksort(arr):
 
 ```
 MoA-PoC/
-├── README.md
+├── README.md               # 한국어 설명서
+├── README_EN.md            # English README
 ├── requirements.txt
 ├── docs/
 │   └── implementation_plan.md  # 상세 명세서
