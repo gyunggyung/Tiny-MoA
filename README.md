@@ -2,7 +2,7 @@
 
 # 🤖 Tiny MoA (Mixture of Agents) PoC
 
-> **"GPU Poor를 위한 AI 군단"** - 4B 모델 하나 대신, 1.2B Brain + 600M 전문가 조합으로 더 나은 성능을!
+> **"GPU Poor를 위한 AI 군단"** - 4B 모델 하나 대신, 1.2B Brain + 600M Reasoner + 90M Tool Caller 조합으로 더 나은 성능을!
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://python.org)
@@ -13,7 +13,7 @@
 
 ## ✨ 주요 기능
 
-- 🧠 **Multi-Agent 아키텍처**: Brain (1.2B) + Reasoner (600M) 조합
+- 🧠 **Multi-Agent 아키텍처**: Brain (1.2B) + Reasoner (600M) + Tool Caller (90M)
 - 🔧 **Tool Calling**: 실시간 날씨, 웹 검색, 계산, 시간 조회
 - 🌐 **다국어 지원**: 한국어, 일본어, 중국어 등 자동 번역
 - ⚡ **CPU 전용**: GPU 없이 16GB RAM으로 구동

@@ -2,7 +2,7 @@
 
 # 🤖 Tiny MoA (Mixture of Agents) PoC
 
-> **"AI Legion for the GPU Poor"** - Instead of one 4B model, combine 1.2B Brain + 600M Specialist for better performance!
+> **"AI Legion for the GPU Poor"** - Instead of one 4B model, combine 1.2B Brain + 600M Reasoner + 90M Tool Caller for better performance!
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://python.org)
@@ -13,7 +13,7 @@
 
 ## ✨ Key Features
 
-- 🧠 **Multi-Agent Architecture**: Brain (1.2B) + Reasoner (600M) combination
+- 🧠 **Multi-Agent Architecture**: Brain (1.2B) + Reasoner (600M) + Tool Caller (90M)
 - 🔧 **Tool Calling**: Real-time weather, web search, calculator, time queries
 - 🌐 **Multilingual Support**: Auto-translation for Korean, Japanese, Chinese, etc.
 - ⚡ **CPU Only**: Runs on 16GB RAM without GPU
