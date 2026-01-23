@@ -1,0 +1,15 @@
+# Tiny MoA PoC Dependencies
+# CPU-Only, Windows 16GB RAM 환경 최적화
+
+# Core - llama.cpp Python bindings
+llama-cpp-python>=0.3.0
+
+# Hugging Face
+huggingface-hub>=0.25.0
+
+# Utilities
+rich>=13.0.0          # CLI 출력
+pydantic>=2.0.0       # 데이터 검증
+
+# Optional - 확장 시 설치
+# docling>=1.0.0      # 문서 파싱
