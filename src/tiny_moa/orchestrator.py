@@ -21,6 +21,14 @@ if str(project_root) not in sys.path:
 from tiny_moa.brain import Brain
 from tiny_moa.reasoner import Reasoner
 
+# 번역 모듈 import
+try:
+    from translation.pipeline import TranslationPipeline
+    from translation.detector import detect_language
+    TRANSLATION_AVAILABLE = True
+except ImportError:
+    TRANSLATION_AVAILABLE = False
+
 console = Console()
 
 
@@ -36,6 +44,7 @@ class TinyMoA:
         use_thinking: bool = False,
         lazy_load: bool = True,
         enable_tools: bool = True,
+        enable_translation: bool = True,
     ):
         """
         Args:
@@ -54,6 +63,17 @@ class TinyMoA:
         self.use_thinking = use_thinking
         self.lazy_load = lazy_load
         self.enable_tools = enable_tools
+        self.enable_translation = enable_translation and TRANSLATION_AVAILABLE
+        
+        # 번역 파이프라인 초기화
+        self._translation_pipeline = None
+        if self.enable_translation:
+            try:
+                self._translation_pipeline = TranslationPipeline(use_simple_translator=True)
+                console.print("[dim]🌐 Translation Pipeline 활성화[/dim]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️ 번역 비활성화: {e}[/yellow]")
+                self.enable_translation = False
         
         self._brain: Optional[Brain] = None
         self._reasoner: Optional[Reasoner] = None
@@ -244,6 +264,28 @@ Be concise and format the information nicely."""
             expression = match.group().strip() if match else "0"
             return {"name": "calculate", "arguments": {"expression": expression}}
         
+        # tool_hint 없을 때 키워드 기반 폴백 (영어 키워드 포함)
+        weather_keywords = ["weather", "날씨", "기온", "온도", "temperature"]
+        search_keywords = ["search", "find", "검색", "찾아", "알려줘"]
+        time_keywords = ["time", "시간", "몇시", "what time", "current time"]
+        
+        if any(kw in user_lower for kw in weather_keywords):
+            # 도시명 추출
+            cities = ["seoul", "서울", "tokyo", "도쿄", "new york", "뉴욕", "london", "런던",
+                      "busan", "부산", "incheon", "인천", "osaka", "오사카"]
+            location = "Seoul"
+            for city in cities:
+                if city in user_lower:
+                    location = city.title().replace("서울", "Seoul").replace("도쿄", "Tokyo").replace("뉴욕", "New York").replace("런던", "London").replace("부산", "Busan")
+                    break
+            return {"name": "get_weather", "arguments": {"location": location}}
+        
+        if any(kw in user_lower for kw in search_keywords):
+            return {"name": "search_web", "arguments": {"query": user_input}}
+        
+        if any(kw in user_lower for kw in time_keywords):
+            return {"name": "get_current_time", "arguments": {"timezone": "Asia/Seoul"}}
+        
         return {"error": "Could not infer tool from keywords"}
     
     def chat(self, user_input: str, verbose: bool = True) -> str:
@@ -260,8 +302,20 @@ Be concise and format the information nicely."""
         if verbose:
             console.print(f"\n[bold]📝 입력:[/bold] {user_input}")
         
-        # 1. Brain이 라우팅 결정
-        route_result = self.brain.route(user_input)
+        # 0. 번역 파이프라인: 다국어 → 영어
+        translation_ctx = None
+        processed_input = user_input
+        
+        if self.enable_translation and self._translation_pipeline:
+            translation_ctx = self._translation_pipeline.to_english(user_input)
+            if translation_ctx.is_translated:
+                processed_input = translation_ctx.english_text
+                if verbose:
+                    console.print(f"[dim]🌐 번역: {translation_ctx.original_lang} → en[/dim]")
+                    console.print(f"[dim]   영어: {processed_input[:50]}...[/dim]")
+        
+        # 1. Brain이 라우팅 결정 (영어로 된 입력 사용)
+        route_result = self.brain.route(processed_input)
         route = route_result.get("route", "DIRECT")
         specialist_prompt = route_result.get("specialist_prompt", "")
         tool_hint = route_result.get("tool_hint", "")
@@ -289,7 +343,13 @@ Be concise and format the information nicely."""
             # Brain이 직접 응답
             if verbose:
                 console.print("[dim]🧠 Brain 직접 응답...[/dim]")
-            final_response = self.brain.direct_respond(user_input)
+            final_response = self.brain.direct_respond(processed_input)
+        
+        # 3. 번역 파이프라인: 영어 → 원래 언어
+        if translation_ctx and translation_ctx.is_translated and self._translation_pipeline:
+            if verbose:
+                console.print(f"[dim]🌐 번역: en → {translation_ctx.original_lang}[/dim]")
+            final_response = self._translation_pipeline.from_english(final_response, translation_ctx)
         
         if verbose:
             console.print(Panel(
@@ -305,8 +365,9 @@ def interactive_mode():
     """대화형 모드"""
     console.print(Panel(
         "[bold]🤖 Tiny MoA 대화형 모드[/bold]\n"
-        "🔧 Tool Calling 지원: 날씨, 검색, 계산, 시간\n"
-        "종료하려면 'quit' 또는 'exit' 입력",
+        "🔧 Tool Calling: 날씨, 검색, 계산, 시간\n"
+        "🌐 다국어 지원: 한국어, 일본어, 중국어 등\n"
+        "종료: 'quit' 또는 'exit'",
         border_style="blue",
     ))
     
