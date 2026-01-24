@@ -154,13 +154,14 @@ class TinyMoA:
             self._load_tool_caller()
         return self._tool_executor
     
-    def _handle_tool_call(self, user_input: str, tool_hint: str = "", verbose: bool = True) -> str:
+    def _handle_tool_call(self, user_input: str, tool_hint: str = "", arg_hint: str = "", verbose: bool = True) -> str:
         """
         Tool 호출 처리
         
-        1. Falcon-90M으로 JSON 생성 (또는 키워드 기반 폴백)
-        2. Tool 실행
-        3. Brain으로 결과 포맷팅
+        1. Brain이 제공한 arg_hint가 있으면 우선 사용
+        2. 아니면 Falcon-90M으로 JSON 생성 (또는 키워드 기반 폴백)
+        3. Tool 실행
+        4. Brain으로 결과 포맷팅
         """
         if not self.enable_tools or self.tool_executor is None:
             return self.brain.direct_respond(
@@ -168,17 +169,42 @@ class TinyMoA:
                 system_prompt="The user is asking about real-time information but tools are not available. Apologize and explain."
             )
         
-        # 1. Tool 호출 JSON 생성
-        if self.tool_caller and self.tool_caller._falcon:
-            # Falcon-90M 사용
+        tool_call = {}
+        
+        # 1. Brain이 제공한 최적화 인자 사용 (우선순위 1)
+        if arg_hint and tool_hint:
             if verbose:
-                console.print("[dim]🔧 Tool Caller (Falcon-90M) 호출 중...[/dim]")
-            tool_call = self.tool_caller.generate_tool_call(user_input)
-        else:
-            # 키워드 기반 폴백 (모델 없이)
-            if verbose:
-                console.print("[dim]🔧 키워드 기반 Tool 추론 중...[/dim]")
-            tool_call = self._infer_tool_from_keywords(user_input, tool_hint)
+                console.print(f"[dim]🧠 Brain 최적화 인자 사용: {tool_hint}({arg_hint})[/dim]")
+            
+            arguments = {}
+            if tool_hint in ["search_web", "search_news", "search_wikipedia"]:
+                arguments = {"query": arg_hint}
+            elif tool_hint == "execute_command":
+                arguments = {"command": arg_hint}
+            elif tool_hint == "get_weather":
+                arguments = {"location": arg_hint}
+            elif tool_hint == "get_current_time":
+                arguments = {"timezone": arg_hint}
+            elif tool_hint == "calculate":
+                arguments = {"expression": arg_hint}
+            elif tool_hint == "read_url":
+                arguments = {"url": arg_hint}
+            
+            if arguments:
+                tool_call = {"name": tool_hint, "arguments": arguments}
+        
+        # 2. Tool Call이 아직 없으면 Falcon/키워드 사용
+        if not tool_call:
+            if self.tool_caller and self.tool_caller._falcon:
+                # Falcon-90M 사용
+                if verbose:
+                    console.print("[dim]🔧 Tool Caller (Falcon-90M) 호출 중...[/dim]")
+                tool_call = self.tool_caller.generate_tool_call(user_input)
+            else:
+                # 키워드 기반 폴백 (모델 없이)
+                if verbose:
+                    console.print("[dim]🔧 키워드 기반 Tool 추론 중...[/dim]")
+                tool_call = self._infer_tool_from_keywords(user_input, tool_hint)
         
         if "error" in tool_call:
             if verbose:
@@ -340,7 +366,8 @@ Be concise and format the information nicely."""
             # Tool Calling
             if verbose:
                 console.print(f"[dim]🔧 Tool 호출: {tool_hint}[/dim]")
-            final_response = self._handle_tool_call(user_input, tool_hint, verbose)
+            # specialist_prompt를 arg_hint로 전달
+            final_response = self._handle_tool_call(user_input, tool_hint, specialist_prompt, verbose)
             
         elif route == "REASONER" and specialist_prompt:
             # Reasoner 호출

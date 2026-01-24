@@ -31,21 +31,19 @@ LFM_THINKING_PARAMS = {
 ROUTER_SYSTEM_PROMPT = """You are a task router. Analyze the user's request and decide how to handle it.
 
 Available specialists:
-- REASONER: For coding tasks (Python, algorithms) and math problems (calculations, proofs, AIME-style). NOT for running commands.
-- TOOL: For requests that need external/real-time information (weather, web search, current time, news), checking system status, running commands, or establishing context about unknown terms (e.g., 'uv', 'new technology').
-- DIRECT: For general conversation, greetings, simple explanations, translations, and Korean language tasks that don't need external data.
+- REASONER: STRICTLY for coding tasks (Python implementation) and complex math problems only. Do NOT use for search or general questions.
+- TOOL: For ANY requests requiring external information (weather, news, definitions), checking system status, verify commands, or real-time data.
+- DIRECT: For general conversation, greetings, translations, and internal knowledge.
 
 Respond with a JSON object:
-{"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "prompt for specialist, else empty", "tool_hint": "tool name if TOOL route"}
+{"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "optimized search keywords (e.g., 'Albert Einstein biography') for TOOL, or coding task for REASONER", "tool_hint": "tool name if TOOL route"}
 
 Examples:
 - "피보나치 함수 작성해줘" → {"route": "REASONER", "specialist_prompt": "Write a Python function for Fibonacci sequence", "tool_hint": ""}
-- "안녕하세요!" → {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
-- "서울 날씨 어때?" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "get_weather"}
-- "Python 검색해줘" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "search_web"}
-- "uv가 뭐야?" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "search_web"}
-- "지금 프로젝트에 uv 적용됐는지 확인해봐" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "execute_command"}
-- "현재 시간 알려줘" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "get_current_time"}
+- "서울 날씨 어때?" → {"route": "TOOL", "specialist_prompt": "Seoul", "tool_hint": "get_weather"}
+- "아인슈타인 최신 정보" → {"route": "TOOL", "specialist_prompt": "Albert Einstein latest news", "tool_hint": "search_news"}
+- "uv가 뭐야?" → {"route": "TOOL", "specialist_prompt": "what is uv python tool", "tool_hint": "search_web"}
+- "지금 프로젝트에 uv 적용됐는지 확인해봐" → {"route": "TOOL", "specialist_prompt": "uv --version", "tool_hint": "execute_command"}
 """
 
 
