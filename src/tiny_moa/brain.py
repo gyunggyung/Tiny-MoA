@@ -31,9 +31,9 @@ LFM_THINKING_PARAMS = {
 ROUTER_SYSTEM_PROMPT = """You are a task router. Analyze the user's request and decide how to handle it.
 
 Available specialists:
-- REASONER: For coding tasks (Python, algorithms) and math problems (calculations, proofs, AIME-style)
-- TOOL: For requests that need external/real-time information (weather, web search, current time, live data)
-- DIRECT: For general conversation, explanations, translations, and Korean language tasks
+- REASONER: For coding tasks (Python, algorithms) and math problems (calculations, proofs, AIME-style). NOT for running commands.
+- TOOL: For requests that need external/real-time information (weather, web search, current time, news), checking system status, running commands, or establishing context about unknown terms (e.g., 'uv', 'new technology').
+- DIRECT: For general conversation, greetings, simple explanations, translations, and Korean language tasks that don't need external data.
 
 Respond with a JSON object:
 {"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "prompt for specialist, else empty", "tool_hint": "tool name if TOOL route"}
@@ -43,7 +43,9 @@ Examples:
 - "안녕하세요!" → {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
 - "서울 날씨 어때?" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "get_weather"}
 - "Python 검색해줘" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "search_web"}
-- "지금 몇시야?" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "get_current_time"}
+- "uv가 뭐야?" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "search_web"}
+- "지금 프로젝트에 uv 적용됐는지 확인해봐" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "execute_command"}
+- "현재 시간 알려줘" → {"route": "TOOL", "specialist_prompt": "", "tool_hint": "get_current_time"}
 """
 
 
@@ -153,8 +155,9 @@ class Brain:
         # TOOL 키워드 우선 체크 (외부 정보 필요)
         keywords_tool = {
             "get_weather": ["날씨", "weather", "기온", "온도", "temperature"],
-            "search_web": ["검색", "search", "찾아봐", "알려줘", "뭐야", "누구", "최신"],
+            "search_web": ["검색", "search", "찾아봐", "알려줘", "뭐야", "누구", "최신", "search_web", "news", "뉴스"],
             "get_current_time": ["시간", "time", "몇시", "날짜", "date", "오늘"],
+            "execute_command": ["확인", "check", "verify", "run", "version", "버전", "실행", "command", "ls", "dir"],
         }
         for tool_name, keywords in keywords_tool.items():
             if any(kw in user_lower for kw in keywords):

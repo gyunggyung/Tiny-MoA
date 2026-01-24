@@ -73,6 +73,78 @@ TOOLS = [
             "required": []
         }
     },
+    {
+        "name": "search_news",
+        "description": "Search recent news articles using DuckDuckGo",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "News search query"
+                },
+                "num_results": {
+                    "type": "integer",
+                    "description": "Number of results (default: 5, max: 10)"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "search_wikipedia",
+        "description": "Get Wikipedia article summary for a topic",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Topic to search on Wikipedia"
+                },
+                "lang": {
+                    "type": "string",
+                    "description": "Language code (en, ko, ja, etc. Default: en)"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "read_url",
+        "description": "Read and extract text content from a URL",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "URL to read content from"
+                },
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Maximum characters to return (default: 2000)"
+                }
+            },
+            "required": ["url"]
+        }
+    },
+    {
+        "name": "execute_command",
+        "description": "Execute a terminal/shell command (Windows/Linux). Use for running Python, checking system info, etc.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Command to execute (e.g., 'python --version', 'dir', 'ls')"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in seconds (default: 30)"
+                }
+            },
+            "required": ["command"]
+        }
+    },
 ]
 
 

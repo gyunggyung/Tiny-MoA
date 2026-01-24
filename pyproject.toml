@@ -13,16 +13,15 @@ keywords = ["ai", "llm", "agents", "mixture-of-agents", "cpu", "lightweight"]
 dependencies = [
     # Core - llama.cpp Python bindings
     "llama-cpp-python>=0.3.0",
-    
     # Hugging Face
     "huggingface-hub>=0.25.0",
-    
     # Utilities
     "rich>=13.0.0",
     "pydantic>=2.0.0",
-    
     # Tool Calling
     "requests>=2.31.0",
+    "duckduckgo-search>=8.1.1",
+    "tzdata>=2025.3",
 ]
 
 [project.optional-dependencies]

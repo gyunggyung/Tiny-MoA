@@ -10,9 +10,13 @@
 | 도구 | 상태 | 데이터 소스 |
 |------|------|-------------|
 | `get_weather` | ✅ 작동 | wttr.in API (실제) |
-| `get_current_time` | ✅ 작동 | 시스템 시간 |
+| `get_current_time` | ✅ 작동 | 시스템 시간 (+tzdata) |
 | `calculate` | ✅ 작동 | Python eval |
-| `search_web` | ⚠️ Mock | 가짜 데이터 |
+| `search_web` | ✅ 작동 | DuckDuckGo (실제) |
+| `search_news` | ✅ 작동 | DuckDuckGo News |
+| `search_wikipedia`| ✅ 작동 | Wikipedia API |
+| `read_url` | ✅ 작동 | Requests + URL Reader |
+| `execute_command` | ✅ 작동 | Subprocess (유해 명령 차단) |
 
 ### ❌ 해결 필요
 1. **웹 검색이 Mock 데이터** → 실제 검색 결과 필요

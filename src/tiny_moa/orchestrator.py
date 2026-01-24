@@ -280,7 +280,19 @@ Be concise and format the information nicely."""
                     break
             return {"name": "get_weather", "arguments": {"location": location}}
         
-        if any(kw in user_lower for kw in search_keywords):
+        command_keywords = ["실행", "run", "check", "verify", "version", "버전", "확인", "ls", "dir", "command"]
+        if any(kw in user_lower for kw in command_keywords) and ("코드" not in user_lower):
+             # 간단한 명령어 추출 시도 (매우 단순화됨)
+            cmd = "ver" # 기본값
+            if "uv" in user_lower:
+                 cmd = "uv --version"
+            elif "python" in user_lower:
+                 cmd = "python --version"
+            elif "dir" in user_lower or "목록" in user_lower:
+                 cmd = "dir"
+            return {"name": "execute_command", "arguments": {"command": cmd}}
+
+        if any(kw in user_lower for kw in search_keywords) or "uv" in user_lower:
             return {"name": "search_web", "arguments": {"query": user_input}}
         
         if any(kw in user_lower for kw in time_keywords):
