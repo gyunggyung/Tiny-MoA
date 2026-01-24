@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.json import JSON
+import re
 
 # 프로젝트 루트를 PYTHONPATH에 추가
 project_root = Path(__file__).parent.parent
@@ -180,7 +181,27 @@ class TinyMoA:
             if tool_hint in ["search_web", "search_news", "search_wikipedia"]:
                 arguments = {"query": arg_hint}
             elif tool_hint == "execute_command":
-                arguments = {"command": arg_hint}
+                # 방어 로직: 명령어가 자연어 문장으로 보이면 무시하고 키워드 폴백 사용
+                # LFM 1.2B가 가끔 "Check if..." 같은 지시문을 생성함
+                is_valid_cmd = True
+                bad_starters = ["Check", "Verify", "Confirm", "Please", "Ensure", "See", "Test", "Determine"]
+                
+                # 1. 자연어 시작 패턴 체크
+                if any(arg_hint.strip().startswith(s) for s in bad_starters) and len(arg_hint.split()) > 2:
+                    is_valid_cmd = False
+                
+                # 2. 한글 포함 여부 체크 (명령어에 한글이 있으면 자연어 설명일 확률 높음)
+                if re.search(r'[가-힣]', arg_hint):
+                    is_valid_cmd = False
+                
+                if is_valid_cmd:
+                    arguments = {"command": arg_hint}
+                else:
+                    if verbose:
+                         console.print(f"[yellow]⚠️ Brain 생성 명령어('{arg_hint}')가 자연어 설명으로 감지되어 무시합니다. 키워드 추론을 사용합니다.[/yellow]")
+                    # arguments를 비워두면 아래쪽 tool_call 생성 조건(if arguments:)을 만족하지 못해
+                    # 자연스럽게 2. Falcon/키워드 폴백 로직으로 넘어감
+                    arguments = {}
             elif tool_hint == "get_weather":
                 arguments = {"location": arg_hint}
             elif tool_hint == "get_current_time":

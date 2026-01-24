@@ -36,7 +36,7 @@ Available specialists:
 - DIRECT: For general conversation, greetings, translations, and internal knowledge.
 
 Respond with a JSON object:
-{"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "optimized search keywords (e.g., 'Albert Einstein biography') for TOOL, or coding task for REASONER", "tool_hint": "tool name if TOOL route"}
+{"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "optimized search keywords for TOOL. For 'execute_command', provide the EXACT shell command (e.g., 'uv --version'). Do NOT provide descriptions.", "tool_hint": "tool name if TOOL route"}
 
 Examples:
 - "피보나치 함수 작성해줘" → {"route": "REASONER", "specialist_prompt": "Write a Python function for Fibonacci sequence", "tool_hint": ""}
