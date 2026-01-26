@@ -428,6 +428,61 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         """
         if verbose:
             console.print(f"\n[bold]📝 입력:[/bold] {user_input}")
+
+        # 0.1. [RAG] 파일 참조 감지 (@[filename])
+        # 패턴: @[filename] (공백 포함 가능)
+        rag_context = ""
+        rag_files = re.findall(r"@\[(.*?)\]", user_input)
+        
+        if rag_files:
+            if verbose:
+                console.print(f"[dim]📚 RAG 파일 감지: {rag_files}[/dim]")
+            
+            # Lazy Loading check
+            if not hasattr(self, "_rag_engine") or self._rag_engine is None:
+                try:
+                    from src.rag.engine import RAGEngine
+                    self._rag_engine = RAGEngine()
+                except ImportError as e:
+                     console.print(f"[red]⚠️ RAG Engine 로드 실패: {e}[/red]")
+                     self._rag_engine = None
+
+            if self._rag_engine:
+                for file_ref in rag_files:
+                    # 파일 경로 보정 (현재 디렉토리 기준)
+                    file_path = file_ref.strip()
+                    if not Path(file_path).exists():
+                         # 혹시 절대 경로가 아니라면 현재 작업 디렉토리에서 찾기
+                         file_path = str(Path(project_root) / file_ref.strip())
+                    
+                    if Path(file_path).exists():
+                        # 1. Ingest (이미 처리된 경우 스킵됨 - Engine 내부 로직)
+                        if verbose:
+                             console.print(f"[dim]🔄 문서 처리 중: {Path(file_path).name}...[/dim]")
+                        status = self._rag_engine.ingest_file(file_path)
+                        if verbose:
+                             console.print(f"[dim]   Result: {status}[/dim]")
+                        
+                        # 2. Query (질문과 관련된 내용 검색)
+                        # 질문에서 파일 참조 제거 후 검색
+                        clean_query = re.sub(r"@\[(.*?)\]", "", user_input).strip()
+                        retrieved = self._rag_engine.query(clean_query)
+                        
+                        if retrieved:
+                             rag_context += f"\n\n[Context from {file_ref}]\n{retrieved}\n"
+                    else:
+                        if verbose:
+                             console.print(f"[yellow]⚠️ 파일을 찾을 수 없음: {file_ref}[/yellow]")
+            
+            if rag_context:
+                if verbose:
+                     console.print(f"[dim]📄 RAG 컨텍스트 추가됨 ({len(rag_context)} chars)[/dim]")
+                # [Fix] 사용자 입력에서 @[...] 패턴 제거하여 Brain이 검색어로 오인하지 않게 함
+                user_input = re.sub(r"@\[(.*?)\]", "", user_input).strip()
+                
+                # 사용자 입력에 컨텍스트 주입 (Brain이 읽도록)
+                # 원본 질문은 유지하되, 컨텍스트를 뒤에 붙임
+                user_input += f"\n\n--- Reference Material ---\n{rag_context}\n--------------------------\n(Answer strictly based on the Reference Material above if relevant.)"
         
         # 0.5. [Multi-Step] 복합 질문 분해 (Decomposition)
         # "비교", "compare", "vs" 등 키워드가 있으면 분해 시도
@@ -531,10 +586,18 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                     console.print(f"[dim]   영어: {processed_input[:50]}...[/dim]")
         
         # 1. Brain이 라우팅 결정 (영어로 된 입력 사용)
-        route_result = self.brain.route(processed_input)
-        route = route_result.get("route", "DIRECT")
-        specialist_prompt = route_result.get("specialist_prompt", "")
-        tool_hint = route_result.get("tool_hint", "")
+        # [Fix] RAG 컨텍스트가 있으면 Tool Calling을 방지하고 강제로 DIRECT 응답 유도
+        if rag_context:
+             if verbose:
+                 console.print("[dim]📄 RAG 컨텍스트 존재: 강제로 DIRECT 모드 전환[/dim]")
+             route = "DIRECT"
+             specialist_prompt = ""
+             tool_hint = ""
+        else:
+             route_result = self.brain.route(processed_input)
+             route = route_result.get("route", "DIRECT")
+             specialist_prompt = route_result.get("specialist_prompt", "")
+             tool_hint = route_result.get("tool_hint", "")
         
         if verbose:
             console.print(f"[dim]🧠 라우팅: {route}[/dim]")

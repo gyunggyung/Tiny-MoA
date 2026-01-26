@@ -3801,12 +3801,16 @@ name = "tiny-moa"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "chromadb" },
+    { name = "docling" },
     { name = "duckduckgo-search" },
     { name = "huggingface-hub" },
     { name = "llama-cpp-python" },
     { name = "pydantic" },
+    { name = "pypdfium2" },
     { name = "requests" },
     { name = "rich" },
+    { name = "sentence-transformers" },
     { name = "tzdata" },
 ]
 
@@ -3846,8 +3850,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "chromadb", specifier = ">=0.5.0" },
     { name = "chromadb", marker = "extra == 'all'", specifier = ">=0.4.0" },
     { name = "chromadb", marker = "extra == 'rag'", specifier = ">=0.4.0" },
+    { name = "docling", specifier = ">=2.69.1" },
     { name = "docling", marker = "extra == 'all'", specifier = ">=0.1.0" },
     { name = "docling", marker = "extra == 'docling'", specifier = ">=0.1.0" },
     { name = "duckduckgo-search", specifier = ">=8.1.1" },
@@ -3860,10 +3866,12 @@ requires-dist = [
     { name = "langdetect", marker = "extra == 'translation'", specifier = ">=1.0.9" },
     { name = "llama-cpp-python", specifier = ">=0.3.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pypdfium2", specifier = ">=5.3.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "rich", specifier = ">=13.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "sentence-transformers", specifier = ">=5.2.0" },
     { name = "sentence-transformers", marker = "extra == 'all'", specifier = ">=2.2.0" },
     { name = "sentence-transformers", marker = "extra == 'rag'", specifier = ">=2.2.0" },
     { name = "tzdata", specifier = ">=2025.3" },
