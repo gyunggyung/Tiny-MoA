@@ -130,8 +130,17 @@ class Brain:
                 "get_current_time": ["시간", "time", "몇시", "date", "오늘"],
             }
             
+            # [Historical Data Fallback]
+            # wttr.in은 과거 데이터를 지원하지 않으므로, 과거 관련 키워드가 있으면 검색으로 유도
+            historical_keywords = ["yesterday", "last week", "history", "past", "어제", "지난", "과거", "작년"]
+            is_historical = any(k in user_lower for k in historical_keywords)
+
             for tool_name, keywords in fast_tools.items():
                 if any(kw in user_lower for kw in keywords):
+                    # 날씨 조회인데 과거 데이터라면 -> Search Web으로 변경
+                    if tool_name == "get_weather" and is_historical:
+                        return {"route": "TOOL", "specialist_prompt": user_input, "tool_hint": "search_web"}
+
                     # execute_command의 경우 추가 검증
                     if tool_name == "execute_command":
                         # "python version", "check uv" 등은 확실한 명령
@@ -264,7 +273,9 @@ The user asked a question. The tool provided the following FACTS.
 
 YOUR JOB:
 1. Report the FACTS to the user.
-2. If the user asks for a comparison (e.g. "vs yesterday") but the FACTS don't have it, say "Since I don't have historical data, I cannot compare."
+2. [Comparison Rules]
+   - IF the user asks to compare two DIFFERENT LOCATIONS (e.g. "Seoul vs Tokyo") and you have data for BOTH: DO COMPARE them directly based on the FACTS.
+   - IF the user asks for HISTORICAL data (e.g. "vs yesterday", "last week") and the FACTS don't have it: Say "Since I don't have historical data, I cannot compare with the past."
 3. DO NOT add any opinion, external info, or comparisons not in the FACTS.
 4. DO NOT mention "Daegu" or any other city not in the FACTS.
 
@@ -276,17 +287,107 @@ FACTS:
             {"role": "user", "content": f"User Question: {user_input}\n\nPlease write the answer response:"},
         ]
         
+        # [Stability Fix] 컨텍스트 초기화
+        # 통합 단계는 독립적이므로 이전 대화 맥락이 필요 없음 (Facts에 다 있음)
+        if hasattr(self.model, "reset"):
+            self.model.reset()
+        
         # Temperature 0.1로 창의성 억제
         params = self.params.copy()
         params["temperature"] = 0.1
         
-        response = self.model.create_chat_completion(
+        try:
+            response = self.model.create_chat_completion(
             messages=messages,
             max_tokens=512,
             **params,
         )
         
-        return response["choices"][0]["message"]["content"]
+            return response["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Error integrating response: {e}"
+    
+    def decompose_query(self, user_input: str) -> list[str]:
+        """
+        복합 질문을 단순 질문 리스트로 분해
+        예: "서울과 도쿄 날씨 비교해줘" -> ["서울 날씨 어때?", "도쿄 날씨 어때?", "두 날씨 비교해줘"]
+        """
+        system_prompt = """You are a query decomposer.
+Your task is to split a complex question into simple sub-questions.
+
+OUTPUT FORMAT:
+Provide a pure list of queries, one per line. Start each line with a hyphen "- ".
+NO markdown, NO explanations.
+
+EXAMPLES:
+Input: "Compare Seoul and Tokyo weather"
+Output:
+- Get weather in Seoul
+- Get weather in Tokyo
+
+Input: "Check python and uv versions"
+Output:
+- check python version
+- check uv version
+"""
+        # [Stability Fix] LFM 1.2B 모델이 JSON/List 생성 시 'llama_decode returned -1' 크래시가 잦음
+        # 따라서 LLM 호출을 건너뛰고 바로 휴리스틱 분해를 시도함
+        # 필요한 경우에만 LLM을 켜도록 플래그 처리 가능하나, 현재 환경에서는 안정성 최우선.
+        pass
+        
+        """
+        content = ""
+        try:
+            # (LLM Call skipped to prevent crash)
+            pass
+        except:
+             pass
+        """
+            
+        # [Fallback] 휴리스틱/Regex 분해 (LLM 실패 시)
+        # "서울과 도쿄" -> ["서울", "도쿄"] -> ["서울 날씨", "도쿄 날씨"] (날씨가 포함된 경우)
+        import re
+        topic = "weather" if any(k in user_input for k in ["날씨", "weather"]) else ""
+        
+        # Regex로 분리 (와/과/랑/이랑/vs/and/,)
+        # \s*는 공백이 있을수도 없을수도 있음을 의미
+        # (?: ... )는 비캡처 그룹
+        # Regex로 분리 (와/과/랑/이랑/vs/and/,)
+        # \s*는 공백이 있을수도 없을수도 있음을 의미
+        # (?: ... )는 비캡처 그룹
+        # ? 문자로도 분리 (질문이 여러 개인 경우)
+        split_pattern = r"\s*(?:vs|and|,|와|과|랑|이랑|\?)\s*"
+        
+        parts = re.split(split_pattern, user_input)
+        
+        # 정제 및 유효성 검사
+        parts = [p.strip() for p in parts if len(p.strip()) > 1]
+        
+        if len(parts) > 1:
+            # 정제된 쿼리 생성
+            final_queries = []
+            for p in parts:
+                # 불필요한 서술어 제거 (비교해줘, 알려줘 등)
+                # 주의: "어때" 뒤에 오는 내용이 삭제되면 안되므로 .* 사용 시 주의.
+                # 이미 분리되었으므로 p는 "서울 날씨 어때" 형태일 것임. 따라서 .* 써도 됨.
+                clean_p = re.sub(r"(비교|compare|알려줘|해줘|어때|Check|Verify|with).*", "", p).strip()
+                
+                if not clean_p: continue
+                
+                # "도쿄 날씨" 처럼 날씨가 이미 포함된 경우 중복 방지
+                if topic and topic not in clean_p and "날씨" not in clean_p:
+                     q = f"{clean_p} {topic}".strip()
+                else:
+                     q = clean_p
+                
+                if len(q) > 1: # 너무 짧은 쿼리 제외
+                     final_queries.append(q)
+            
+            if len(final_queries) > 1:
+                print(f"[Brain] Heuristic Decomposition: {final_queries}")
+                return final_queries
+            
+        return [user_input] # 실패 시 원본 그대로 반환
 
 
 if __name__ == "__main__":

@@ -5,6 +5,10 @@ python -m tiny_moa.main [--interactive]
 """
 
 import argparse
+import warnings
+# Suppress ResourceWarning: unclosed file <_io.TextIOWrapper ...>
+warnings.filterwarnings("ignore", category=ResourceWarning)
+
 from tiny_moa.orchestrator import TinyMoA, interactive_mode
 from rich.console import Console
 

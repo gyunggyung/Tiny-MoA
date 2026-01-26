@@ -10,7 +10,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 # 개별 도구 함수들
-def get_weather(location: str, unit: str = "celsius") -> dict[str, Any]:
+def get_weather(location: str, unit: str = "celsius", **kwargs) -> dict[str, Any]:
     """
     날씨 정보 조회 (wttr.in API - 무료, API 키 불필요)
     """

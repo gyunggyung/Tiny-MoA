@@ -248,6 +248,23 @@ class TinyMoA:
                 border_style="cyan" if result.get("success") else "red",
             ))
         
+        # [Semantic Error Detection] Soft Error 감지
+        # 툴이 성공(True)했다고 보고해도, 내용에 에러 키워드가 있으면 실패로 간주
+        if result.get("success", False):
+            raw_result = str(result.get("result", "")).lower()
+            error_keywords = ["timeout", "timed out", "rate limit", "api error", "access denied", "404 not found", "500 internal server error", "traceback"]
+            
+            # 단, "error"라는 단어는 일반 문장에도 들어갈 수 있으므로 주의 (여기서는 보수적으로 제외하거나 문맥 파악 필요)
+            # 확실한 시스템 에러 키워드만 우선 적용
+            
+            for keyword in error_keywords:
+                if keyword in raw_result:
+                    if verbose:
+                        console.print(f"[yellow]⚠️ Semantic Error 감지: '{keyword}' - 재시도 트리거[/yellow]")
+                    result["success"] = False
+                    result["error"] = f"Tool returned success but contained error keyword: {keyword}"
+                    break
+        
         # 3. Brain으로 결과 포맷팅 or 재시도
         if result.get("success", False):
             tool_result = result.get("result", {})
@@ -412,6 +429,95 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         if verbose:
             console.print(f"\n[bold]📝 입력:[/bold] {user_input}")
         
+        # 0.5. [Multi-Step] 복합 질문 분해 (Decomposition)
+        # "비교", "compare", "vs" 등 키워드가 있으면 분해 시도
+        complex_keywords = ["비교", "compare", "vs", "difference", "차이", "어때?"] # '어때?'는 애매하지만 일단 테스트
+        is_complex = any(k in user_input for k in ["비교", "compare", "vs", "difference", "차이"])
+        
+        if is_complex:
+            if verbose:
+                console.print("[dim]🧩 복합 질문 감지: 분해 시도 중...[/dim]")
+            
+            sub_queries = self.brain.decompose_query(user_input)
+            
+            # 분해가 실제로 일어났는지 확인 (1개 이상이고, 원본과 다을 때)
+            if len(sub_queries) > 1:
+                if verbose:
+                    console.print(f"[dim]🧩 분해 결과: {sub_queries}[/dim]")
+                
+                context_results = []
+                for sub_q in sub_queries:
+                    # 각 하위 질문 처리
+                    # 재귀 호출 방지를 위해 단순 처리 로직 필요하나, 여기서는 chat() 호출하되
+                    # 무한 루프 방지를 위해 is_complex 체크가 중요함.
+                    # 하지만 sub_q는 단순할 것이므로 괜찮음.
+                    # 다만 chat()은 번역/출력을 또 하므로, 내부 함수 _process_single_turn 같은게 필요.
+                    # 여기서는 간단히: route -> handle_tool_call 복붙 로직 사용 (함수 분리 권장하지만 일단 인라인)
+                    
+                    # 1. Brain이 라우팅 결정 (Sub query)
+                    # 번역 필요시 번역
+                    sub_processed = sub_q
+                    if self.enable_translation and self._translation_pipeline:
+                        t_ctx = self._translation_pipeline.to_english(sub_q)
+                        if t_ctx.is_translated:
+                            sub_processed = t_ctx.english_text
+
+                    route_result = self.brain.route(sub_processed)
+                    route = route_result.get("route", "DIRECT")
+                    
+                    step_result = ""
+                    if route == "TOOL":
+                         tool_hint = route_result.get("tool_hint", "")
+                         arg_hint = route_result.get("specialist_prompt", "")
+                         # Tool 실행 및 결과 획득 (포맷팅 전의 Raw Result가 필요하지만, _handle_tool_call은 포맷팅된 텍스트 반환)
+                         # 여기선 _handle_tool_call의 결과를 그대로 텍스트로 사용
+                         step_result = self._handle_tool_call(sub_q, tool_hint, arg_hint, verbose=True)
+                    else:
+                         step_result = self.brain.direct_respond(sub_processed)
+                    
+                    
+                    context_results.append(f"Query: {sub_q}\nResult: {step_result[:500]}") # 결과 길이 제한 (500자)
+                
+                # 결과 통합
+                aggregated_context = "\n\n".join(context_results)
+                
+                # 통합 호출 전 메모리 정리 (간접적)
+                if hasattr(self.brain.model, "reset"):
+                    self.brain.model.reset()
+                    
+                final_response = self.brain.integrate_response(user_input, aggregated_context)
+                
+                if verbose:
+                    console.print(Panel(
+                        Markdown(final_response),
+                        title="[bold green]💬 통합 응답[/bold green]",
+                        border_style="green",
+                    ))
+                
+                # 번역: en → original_lang (있다면)
+                # 주의: decomposition 로직 시작 전에 translation_ctx를 구했어야 함.
+                # 하지만 구조상 chat 함수의 메인 파이프라인(0번 단계)보다 먼저 실행됨.
+                # 따라서 여기서 별도로 detect/translate 하거나, 0번 단계를 위로 올려야 함.
+                # 리팩토링 최소화를 위해 여기서 간단히 처리.
+                
+                # (이미 chat 함수 진입 시점에는 processed_input이 없으므로, user_input을 이용)
+                if self.enable_translation and self._translation_pipeline:
+                     # 이미 decomposed된 쿼리는 내부적으로 번역되어 처리되었음.
+                     # 최종 결과만 번역하면 됨.
+                     # 단, 타겟 언어를 알기 위해 user_input 감지 필요
+                     target_lang_ctx = self._translation_pipeline.to_english(user_input)
+                     if target_lang_ctx.is_translated:
+                          final_response = self._translation_pipeline.from_english(final_response, target_lang_ctx)
+                          if verbose:
+                              console.print(f"[dim]🌐 최종 번역: en → {target_lang_ctx.original_lang}[/dim]")
+                              console.print(Panel(
+                                    Markdown(final_response),
+                                    title="[bold green]💬 번역된 응답[/bold green]",
+                                    border_style="green",
+                                ))
+
+                return final_response
+
         # 0. 번역 파이프라인: 다국어 → 영어
         translation_ctx = None
         processed_input = user_input
