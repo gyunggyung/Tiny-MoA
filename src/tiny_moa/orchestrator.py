@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.json import JSON
 import re
+import threading
 
 # 프로젝트 루트를 PYTHONPATH에 추가
 project_root = Path(__file__).parent.parent
@@ -21,6 +22,7 @@ if str(project_root) not in sys.path:
 
 from tiny_moa.brain import Brain
 from tiny_moa.reasoner import Reasoner
+import logging
 
 # 번역 모듈 import
 try:
@@ -80,6 +82,8 @@ class TinyMoA:
         self._reasoner: Optional[Reasoner] = None
         self._tool_caller = None
         self._tool_executor = None
+        self.dashboard = None
+        self._model_lock = threading.Lock()
         
         console.print("[bold blue]🤖 Tiny MoA 초기화 중...[/bold blue]")
         
@@ -155,14 +159,12 @@ class TinyMoA:
             self._load_tool_caller()
         return self._tool_executor
     
-    def _handle_tool_call(self, user_input: str, tool_hint: str = "", arg_hint: str = "", verbose: bool = True) -> str:
+    def _handle_tool_call(self, user_input: str, tool_hint: str = "", arg_hint: str = "", verbose: bool = True, return_raw: bool = False) -> str:
         """
         Tool 호출 처리
         
-        1. Brain이 제공한 arg_hint가 있으면 우선 사용
-        2. 아니면 Falcon-90M으로 JSON 생성 (또는 키워드 기반 폴백)
-        3. Tool 실행
-        4. Brain으로 결과 포맷팅
+        Args:
+            return_raw: True일 경우 Brain 통합 없이 raw result(dict or string) 반환
         """
         if not self.enable_tools or self.tool_executor is None:
             return self.brain.direct_respond(
@@ -220,7 +222,8 @@ class TinyMoA:
                 # Falcon-90M 사용
                 if verbose:
                     console.print("[dim]🔧 Tool Caller (Falcon-90M) 호출 중...[/dim]")
-                tool_call = self.tool_caller.generate_tool_call(user_input)
+                with self._model_lock:
+                    tool_call = self.tool_caller.generate_tool_call(user_input)
             else:
                 # 키워드 기반 폴백 (모델 없이)
                 if verbose:
@@ -238,6 +241,9 @@ class TinyMoA:
         
         if verbose:
             console.print(f"[dim]🔨 Tool 실행: {tool_name}({arguments})[/dim]")
+        
+        if self.dashboard:
+            self.dashboard.add_log(f"API Call: {tool_name}({arguments})", "Tool")
         
         result = self.tool_executor.execute(tool_name, arguments)
         
@@ -267,9 +273,12 @@ class TinyMoA:
         
         # 3. Brain으로 결과 포맷팅 or 재시도
         if result.get("success", False):
+            if return_raw:
+                 return result # Return full result dict (with tool, arguments, result keys)
             tool_result = result.get("result", {})
             # Brain의 integrate_response를 사용하여 환각 방지 및 포맷팅 적용
-            return self.brain.integrate_response(user_input, str(tool_result))
+            with self._model_lock:
+                return self.brain.integrate_response(user_input, str(tool_result))
         else:
             # Tool 실패 -> 재시도 (Retry)
             error = result.get("error", "Unknown error")
@@ -286,10 +295,11 @@ The user wants to: "{user_input}".
 Please provide CORRECTED arguments for the tool '{tool_name}' to fix this error.
 Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "python --version"}}). Do NOT explain."""
 
-                corrected_args_str = self.brain.direct_respond(
-                    retry_prompt, 
-                    system_prompt="You are a tool expert. Provide only the corrected JSON arguments."
-                ).strip()
+                with self._model_lock:
+                    corrected_args_str = self.brain.direct_respond(
+                        retry_prompt, 
+                        system_prompt="You are a tool expert. Provide only the corrected JSON arguments."
+                    ).strip()
                 
                 # 마크다운/JSON 파싱 시도
                 corrected_args_str = corrected_args_str.replace("```json", "").replace("```", "").strip()
@@ -326,8 +336,11 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                         if retry_result.get("success"):
                             # 성공 시 포맷팅 후 반환
                             tool_result = retry_result.get("result", {})
+                            if return_raw:
+                                 return retry_result
                             # Brain의 integrate_response를 사용하여 환각 방지 및 포맷팅 적용
-                            return self.brain.integrate_response(user_input, str(tool_result))
+                            with self._model_lock:
+                                return self.brain.integrate_response(user_input, str(tool_result))
                         else:
                             error = retry_result.get("error", error)
                 except Exception as e:
@@ -415,7 +428,13 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         
         return {"error": "Could not infer tool from keywords"}
     
-    def chat(self, user_input: str, verbose: bool = True) -> str:
+    def chat(self, user_input: str, rag_context: str = "", verbose: bool = True, return_raw_tool_result: bool = False) -> str:
+        """
+        사용자 질문에 응답 (Thinking -> Tool Calling -> RAG -> Brain 순위)
+        
+        Args:
+            return_raw_tool_result: True일 경우 Tool 호출 결과를 Brain 통합 없이 그대로 반환
+        """
         """
         사용자 입력 처리
         
@@ -556,20 +575,27 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                 # 리팩토링 최소화를 위해 여기서 간단히 처리.
                 
                 # (이미 chat 함수 진입 시점에는 processed_input이 없으므로, user_input을 이용)
-                if self.enable_translation and self._translation_pipeline:
-                     # 이미 decomposed된 쿼리는 내부적으로 번역되어 처리되었음.
-                     # 최종 결과만 번역하면 됨.
-                     # 단, 타겟 언어를 알기 위해 user_input 감지 필요
-                     target_lang_ctx = self._translation_pipeline.to_english(user_input)
-                     if target_lang_ctx.is_translated:
-                          final_response = self._translation_pipeline.from_english(final_response, target_lang_ctx)
-                          if verbose:
-                              console.print(f"[dim]🌐 최종 번역: en → {target_lang_ctx.original_lang}[/dim]")
-                              console.print(Panel(
-                                    Markdown(final_response),
-                                    title="[bold green]💬 번역된 응답[/bold green]",
-                                    border_style="green",
-                                ))
+                # [Critical Fix] If raw output is requested, skip ALL translation logic to avoid dict vs string errors
+                if return_raw_tool_result:
+                    return final_response
+
+                if self.enable_translation and self._translation_pipeline and isinstance(final_response, str):
+                    # 이미 decomposed된 쿼리는 내부적으로 번역되어 처리되었음.
+                    # 최종 결과만 번역하면 됨.
+                    # 단, 타겟 언어를 알기 위해 user_input 감지 필요
+                    target_lang_ctx = self._translation_pipeline.to_english(user_input)
+                    if target_lang_ctx.is_translated:
+                        try:
+                            final_response = self._translation_pipeline.from_english(final_response, target_lang_ctx)
+                        except Exception as e:
+                            logger.error(f"Translation failed: {e}")
+                        if verbose:
+                            console.print(f"[dim]🌐 최종 번역: en → {target_lang_ctx.original_lang}[/dim]")
+                            console.print(Panel(
+                                Markdown(final_response),
+                                title="[bold green]💬 번역된 응답[/bold green]",
+                                border_style="green",
+                            ))
 
                 return final_response
 
@@ -578,7 +604,8 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         processed_input = user_input
         
         if self.enable_translation and self._translation_pipeline:
-            translation_ctx = self._translation_pipeline.to_english(user_input)
+            with self._model_lock:
+                translation_ctx = self._translation_pipeline.to_english(user_input)
             if translation_ctx.is_translated:
                 processed_input = translation_ctx.english_text
                 if verbose:
@@ -594,7 +621,8 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
              specialist_prompt = ""
              tool_hint = ""
         else:
-             route_result = self.brain.route(processed_input)
+             with self._model_lock:
+                 route_result = self.brain.route(processed_input)
              route = route_result.get("route", "DIRECT")
              specialist_prompt = route_result.get("specialist_prompt", "")
              tool_hint = route_result.get("tool_hint", "")
@@ -608,14 +636,16 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
             if verbose:
                 console.print(f"[dim]🔧 Tool 호출: {tool_hint}[/dim]")
             # specialist_prompt를 arg_hint로 전달
-            final_response = self._handle_tool_call(user_input, tool_hint, specialist_prompt, verbose)
+            # [Critical Fix] Use processed_input (EN) instead of user_input (KO) for tool calling
+            final_response = self._handle_tool_call(processed_input, tool_hint, specialist_prompt, verbose, return_raw=return_raw_tool_result)
             
         elif route == "REASONER" and specialist_prompt:
             # Reasoner 호출
             if verbose:
                 console.print("[dim]🤔 Reasoner 호출 중...[/dim]")
             
-            specialist_output = self.reasoner.solve(specialist_prompt)
+            with self._model_lock:
+                specialist_output = self.reasoner.solve(specialist_prompt)
             
             # PoC: Reasoner 출력 직접 반환 (토큰 절약)
             final_response = specialist_output
@@ -623,22 +653,271 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
             # Brain이 직접 응답
             if verbose:
                 console.print("[dim]🧠 Brain 직접 응답...[/dim]")
-            final_response = self.brain.direct_respond(processed_input)
+            with self._model_lock:
+                final_response = self.brain.direct_respond(processed_input)
         
         # 3. 번역 파이프라인: 영어 → 원래 언어
-        if translation_ctx and translation_ctx.is_translated and self._translation_pipeline:
+        # [Fix] Raw 결과(dict)는 번역하지 않음 + 타입 체크 강제
+        if not return_raw_tool_result and isinstance(final_response, str) and translation_ctx and translation_ctx.is_translated and self._translation_pipeline:
             if verbose:
                 console.print(f"[dim]🌐 번역: en → {translation_ctx.original_lang}[/dim]")
-            final_response = self._translation_pipeline.from_english(final_response, translation_ctx)
+            with self._model_lock:
+                try:
+                    final_response = self._translation_pipeline.from_english(final_response, translation_ctx)
+                except Exception as e:
+                    logger.error(f"Translation failed (main): {e}")
         
         if verbose:
             console.print(Panel(
-                Markdown(final_response),
+                Markdown(str(final_response)) if isinstance(final_response, str) else JSON.from_data(final_response),
                 title="[bold green]💬 응답[/bold green]",
                 border_style="green",
             ))
         
         return final_response
+
+    def _setup_cowork_logger(self):
+        """Cowork 전용 로거 설정 (TUI 에러 추적용)"""
+        logger = logging.getLogger("cowork")
+        logger.setLevel(logging.INFO)
+        
+        # 기존 핸들러 제거
+        if logger.handlers:
+            logger.handlers.clear()
+            
+        fh = logging.FileHandler("cowork.log", encoding="utf-8")
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        fh.setFormatter(formatter)
+        logger.addHandler(fh)
+        return logger
+
+    def run_cowork_flow(self, user_goal: str, workspace_root: str = ".", use_tui: bool = True) -> str:
+        """
+        Tiny Cowork v2.0 실행 (TUI & Parallel 지원)
+        """
+        from src.tiny_moa.cowork.workspace import WorkspaceContext
+        from src.tiny_moa.cowork.task_queue import TaskQueue, TaskStatus
+        from src.tiny_moa.cowork.planner import PlannerAgent
+        from src.tiny_moa.cowork.skills.file_skills import CoworkFileSkill
+        from src.tiny_moa.ui.dashboard import CoworkDashboard
+        from src.tiny_moa.cowork.parallel_runner import ParallelRunner
+        from src.tiny_moa.cowork.workers.researcher import ResearchWorker
+        from src.tiny_moa.cowork.workers.writer import WriterWorker
+        from src.tiny_moa.cowork.workers.brain_worker import BrainWorker
+        from src.tiny_moa.cowork.workers.tool_worker import ToolWorker
+        from rich.live import Live
+
+        logger = self._setup_cowork_logger()
+        logger.info(f"--- Starting Cowork Session: {user_goal} ---")
+
+        workspace = WorkspaceContext(workspace_root)
+        queue = TaskQueue()
+        planner = PlannerAgent(self.brain)
+        file_skill = CoworkFileSkill(workspace)
+        dashboard = CoworkDashboard(user_goal)
+        self.dashboard = dashboard
+        runner = ParallelRunner(max_workers=4)
+
+        # Worker initialization
+        researcher = ResearchWorker("Research-1", logger, self)
+        writer = WriterWorker("Writer-1", logger, self.brain, file_skill)
+        brain_worker = BrainWorker("Brain-1", logger, self.brain)
+        tool_worker = ToolWorker("Tool-1", logger, self)
+
+        # 0. Intelligent Routing & Fast Track (Optimization)
+        # Check if the task is simple (Tool or Direct) using Brain's router
+        route_data = self.brain.route(user_goal)
+        route = route_data.get("route", "DIRECT")
+        
+        # Determine if it's a simple text/file summary request (Heuristic Fast track)
+        is_simple_summary = any(kw in user_goal.lower() for kw in ["요약", "정리", "summarize", "read", "읽고"]) and len(user_goal) < 50
+        
+        # Decisions
+        bypass_llm_planner = (route in ["TOOL", "DIRECT"]) or is_simple_summary
+        
+        if use_tui:
+            live = Live(dashboard.generate_layout(), refresh_per_second=4, screen=False)
+            live.start()
+            dashboard.add_log("System initialized.", "System")
+            if bypass_llm_planner:
+                dashboard.add_log(f"Intelligent bypass enabled (Route: {route}).", "System")
+            live.update(dashboard.generate_layout())
+        
+        try:
+            # 1. Plan
+            context_str = workspace.get_context_description()
+            if use_tui: 
+                dashboard.add_log("Analyzing request and creating plan...", "Planner")
+                live.update(dashboard.generate_layout())
+            
+            if route == "TOOL":
+                # Decompose complex questions into simple tool tasks
+                sub_queries = self.brain.decompose_query(user_goal)
+                logger.info(f"Using TOOL decomposition: {sub_queries}")
+                tasks_data = [{"description": q, "agent": "tool"} for q in sub_queries]
+                if len(sub_queries) > 1:
+                    dashboard.add_log(f"Decomposed into {len(sub_queries)} tool tasks.", "Planner")
+            elif route == "DIRECT" and not is_simple_summary:
+                # Simple direct response, but also check for decomposition
+                sub_queries = self.brain.decompose_query(user_goal)
+                logger.info(f"Using DIRECT decomposition: {sub_queries}")
+                tasks_data = [{"description": q, "agent": "brain"} for q in sub_queries]
+            elif is_simple_summary:
+                # Heuristic Planning for summary
+                logger.info("Using fast-track heuristic plan for summary.")
+                tasks_data = [
+                    {"description": f"Locate and read target files related to '{user_goal}'", "agent": "rag"},
+                    {"description": "Summarize the extracted content in Korean", "agent": "brain"},
+                    {"description": "Save the final summary", "agent": "writer"}
+                ]
+            else:
+                logger.info("Creating full LLM plan...")
+                tasks_data = planner.create_plan(user_goal, context_str)
+            
+            logger.info(f"Plan created: {tasks_data}")
+            
+            for t in tasks_data:
+                queue.add_task(t.get("description"), t.get("agent", "brain"))
+            
+            all_tasks = queue.get_all_tasks()
+            if use_tui: 
+                 dashboard.update_tasks([{"id": t.id, "desc": t.description, "status": t.status.name, "agent": t.agent_type} for t in all_tasks])
+                 dashboard.add_log(f"Plan created with {len(tasks_data)} tasks.", "Planner")
+                 live.update(dashboard.generate_layout())
+
+            # 2. Execute
+            results = []
+            
+            # Use ParallelRunner if possible (experimental)
+            # Find independent tasks (those with same agent or no clear dependency)
+            # For simplicity, we run 'tool' and 'rag' tasks in parallel if multiple.
+            # 'brain' and 'writer' usually depend on previous results.
+            
+            parallelizable = [t for t in all_tasks if t.agent_type in ["tool", "rag"]]
+            sequential = [t for t in all_tasks if t.agent_type in ["brain", "writer"]]
+            
+            def execute_single_task(task):
+                 try:
+                    agent_type = task.agent_type.lower()
+                    task_lower = task.description.lower()
+                    history = "\n\n".join(results) # Note: Parallel tasks won't have latest history from siblings
+                    
+                    if use_tui:
+                        task.status = TaskStatus.RUNNING
+                        # Show more detail in log: Agent + Preview
+                        dashboard.add_log(f"[{agent_type.upper()}] Thinking: {task.description[:40]}...", agent_type.capitalize())
+                        dashboard.update_tasks([{"id": t.id, "desc": t.description, "status": t.status.name, "agent": t.agent_type} for t in all_tasks])
+                        live.update(dashboard.generate_layout())
+
+                    if agent_type == "tool":
+                        # For tools, we want to know WHICH tool.
+                        # We use chat(return_raw_tool_result=True)
+                        res = tool_worker.execute(task.description)
+                        if use_tui and isinstance(res, dict):
+                             # Extract actual info for log
+                             t_name = res.get("tool", "unknown")
+                             # Search result inner content is in res['result']
+                             t_res = res.get("result", {})
+                             if isinstance(t_res, dict) and "results" in t_res:
+                                  # News/Search result case
+                                  articles = t_res["results"]
+                                  dashboard.add_log(f"Tool {t_name.upper()}: Found {len(articles)} items", "Tool")
+                                  for art in articles:
+                                       title = art.get('title', 'No Title')
+                                       url = art.get('url') or art.get('href', 'No URL')
+                                       dashboard.add_log(f"ARTICLE: {title}", "Source")
+                                       dashboard.add_log(f"   URL: {url}", "Source")
+                             elif isinstance(t_res, dict) and "temperature" in t_res:
+                                  # Weather case
+                                  dashboard.add_log(f"Weather: {t_res['temperature']}, {t_res['condition']}", "Tool")
+                             else:
+                                  dashboard.add_log(f"API {t_name}: {str(t_res)[:50]}...", "Tool")
+                             live.update(dashboard.generate_layout())
+                        # If raw, we need to extract the 'result' part for the final integration
+                        if isinstance(res, dict) and "result" in res:
+                             res = res["result"]
+                    elif agent_type == "rag":
+                        res = researcher.execute(task.description)
+                    elif agent_type == "writer":
+                        res = writer.execute(task.description, history=history, user_goal=user_goal)
+                    else:
+                        res = brain_worker.execute(task.description, history=history)
+                    
+                    # [Critical Fix] Ensure task.result is ALWAYS a string for history/integration
+                    task.result = str(res)
+                    task.status = TaskStatus.COMPLETED
+                    if use_tui:
+                        # Log success and a small snippet of the result
+                        res_str = str(res)
+                        dashboard.add_log(f"Success: {task.id} ({res_str[:50]}...)", agent_type.capitalize())
+                        dashboard.update_tasks([{"id": t.id, "desc": t.description, "status": t.status.name, "agent": t.agent_type} for t in all_tasks])
+                        live.update(dashboard.generate_layout())
+                    return res
+                 except Exception as e:
+                    task.status = TaskStatus.FAILED
+                    task.result = str(e)
+                    if use_tui:
+                        dashboard.add_log(f"Failed {task.id}: {e}", "Error")
+                        dashboard.update_tasks([{"id": t.id, "desc": t.description, "status": t.status.name, "agent": t.agent_type} for t in all_tasks])
+                        live.update(dashboard.generate_layout())
+                    raise e
+
+            # Run parallel tasks first (Independent data gathering)
+            if parallelizable:
+                logger.info(f"Running {len(parallelizable)} tasks in parallel.")
+                if len(parallelizable) > 1:
+                    # Actually use runner
+                    t_dicts = [{"id": t.id, "description": t.description, "agent": t.agent_type} for t in parallelizable]
+                    # We need to map Task objects to t_dicts for the runner
+                    def runner_wrapper(t_dict):
+                        target_task = next(tt for tt in parallelizable if tt.id == t_dict['id'])
+                        return execute_single_task(target_task)
+                    
+                    runner.run_tasks(t_dicts, runner_wrapper)
+                else:
+                    for t in parallelizable: execute_single_task(t)
+
+            # Update results after parallel phase
+            for t in parallelizable:
+                if t.status == TaskStatus.COMPLETED:
+                     results.append(f"[TASK: {t.description}]\nDATA: {t.result}")
+
+            # Run sequential tasks (Summary/Synthesis)
+            for t in sequential:
+                execute_single_task(t)
+                if t.status == TaskStatus.COMPLETED:
+                     results.append(f"[TASK: {t.description}]\nDATA: {t.result}")
+
+            # 3. Final Critic (NEW)
+            if use_tui: 
+                dashboard.add_log("Performing quality check...", "Critic")
+                live.update(dashboard.generate_layout())
+            
+            logger.info("Performing final quality check...")
+            with self._model_lock:
+                final_report = self.brain.integrate_response(user_goal, "\n\n".join(results))
+            
+            if use_tui: 
+                dashboard.add_log("Flow completed successfully.", "System")
+                live.stop()
+            
+            # Save final report to file (Integrated Result)
+            try:
+                write_msg = workspace.write_file("docs/cowork_result.md", final_report)
+                logger.info(f"Auto-save result: {write_msg}")
+                console.print(f"\n[green]ℹ️ 작업 결과가 저장되었습니다: docs/cowork_result.md[/green]")
+            except Exception as e:
+                logger.error(f"Failed to auto-save cowork_result.md: {e}")
+
+            logger.info("Cowork flow completed.")
+            self.dashboard = None
+            return final_report
+            
+        except Exception as e:
+            logger.critical(f"Fatal error in cowork flow: {e}", exc_info=True)
+            self.dashboard = None
+            if use_tui: live.stop()
+            raise e
 
 
 def interactive_mode():

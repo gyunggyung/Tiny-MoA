@@ -15,6 +15,9 @@
 - 기본 에이전트 클래스
 - 한국 문화 전문 에이전트
 - RAG 에이전트
+- [ ] **Modern Web Dashboard**: Glassmorphism 기반의 React/Next.js 실시간 협업 대시보드.
+- [ ] **Advanced Intelligence (v2.1)**: Python 휴리스틱을 넘어선 LLM 기반의 자율적 태스크 분해 및 맥락 인지 극대화.
+- [ ] **Interactive Shell**: 이전 대화 맥락을 기억하고 연속적인 작업을 수행하는 인터랙티브 모드.
 
 ### 3. RAG 시스템 (`src/rag/`)
 - 임베딩 모델 (sentence-transformers)
@@ -47,4 +50,4 @@ uv add sentence-transformers chromadb
 
 ---
 
-자세한 내용은 `translation_multiagent_plan.md` 참조.
+자세한 내용은 `end/translation_multiagent_plan.md` 참조.

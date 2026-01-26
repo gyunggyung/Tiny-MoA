@@ -88,6 +88,11 @@ class DoclingConverter:
         if not path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
             
+        if path.suffix.lower() in [".md", ".txt"]:
+            self.logger.info(f"[{self.name}] Native {path.suffix} detected. Skipping Docling engine.")
+            with open(path, "r", encoding="utf-8") as f:
+                return f.read()
+                
         print(f"[Docling] Converting {path.name} (FastMode={self.high_speed})...")
         
         # 1. 변환 실행

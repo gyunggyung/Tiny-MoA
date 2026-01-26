@@ -11,6 +11,12 @@ import os
 from pathlib import Path
 from typing import Optional
 from llama_cpp import Llama
+import sys
+import logging
+
+# [Optimization] Silence llama-cpp logs to keep UI clean
+os.environ["LLAMA_CPP_LOG_LEVEL"] = "error" 
+logging.getLogger("llama_cpp").setLevel(logging.ERROR)
 
 # LFM2.5 권장 파라미터 (공식 문서: docs.liquid.ai/lfm/inference/llama-cpp)
 LFM_INSTRUCT_PARAMS = {
@@ -31,20 +37,18 @@ LFM_THINKING_PARAMS = {
 ROUTER_SYSTEM_PROMPT = """You are a task router. Analyze the user's request and decide how to handle it.
 
 Available specialists:
-- REASONER: STRICTLY for pure coding tasks (writing Python functions/classes) and complex math problems only. Do NOT use for "checking versions", "verifying installation", or "system status".
-- TOOL: For ANY requests requiring external information (weather, news, definitions), checking system status, verify commands, real-time data, or checking installed packages.
-- DIRECT: For general conversation, greetings, translations, and internal knowledge.
+- REASONER: STRICTLY for pure coding tasks (writing Python functions/classes) and complex algorithmic/math problems only. Do NOT use for "summarizing", "explaining", "reading files", "checking versions", or "general info".
+- TOOL: For requests requiring external information (weather, news, definitions), system status, verify commands, or real-time data.
+- DIRECT: For general conversation, summaries, explanations, greetings, translations, and internal knowledge.
 
 Respond with a JSON object:
-{"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "optimized search keywords for TOOL. For 'execute_command', provide the EXACT shell command (e.g., 'uv --version', 'python --version'). Do NOT provide natural language descriptions or markdown blocks for commands.", "tool_hint": "tool name if TOOL route"}
+{"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "optimized search keywords for TOOL. For 'execute_command', provide the EXACT shell command. Do NOT provide natural language descriptions.", "tool_hint": "tool name if TOOL route"}
 
 Examples:
 - "피보나치 함수 작성해줘" → {"route": "REASONER", "specialist_prompt": "Write a Python function for Fibonacci sequence", "tool_hint": ""}
+- "이 문서 요약해줘" → {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
 - "서울 날씨 어때?" → {"route": "TOOL", "specialist_prompt": "Seoul", "tool_hint": "get_weather"}
-- "아인슈타인 최신 정보" → {"route": "TOOL", "specialist_prompt": "Albert Einstein latest news", "tool_hint": "search_news"}
 - "uv가 뭐야?" → {"route": "TOOL", "specialist_prompt": "what is uv python tool", "tool_hint": "search_web"}
-- "지금 프로젝트에 uv 적용됐는지 확인해봐" → {"route": "TOOL", "specialist_prompt": "uv --version", "tool_hint": "execute_command"}
-- "현재 파이썬 버전 알려줘" → {"route": "TOOL", "specialist_prompt": "python --version", "tool_hint": "execute_command"}
 """
 
 
@@ -90,7 +94,7 @@ class Brain:
                         f"Error: {e}"
                     )
         
-        print(f"[Brain] Loading model from: {model_path}")
+        # logger.info(f"[Brain] Loading model from: {model_path}") # Removed print to clean UI
         
         # 스레드 수 결정 (CPU 코어의 절반 권장)
         if n_threads is None:
@@ -103,7 +107,7 @@ class Brain:
             verbose=False,
         )
         
-        print(f"[Brain] Loaded! (threads={n_threads}, ctx={n_ctx})")
+        # logger.info(f"[Brain] Loaded! (threads={n_threads}, ctx={n_ctx})") # Removed print to clean UI
     
     def route(self, user_input: str) -> dict:
         """
@@ -125,7 +129,8 @@ class Brain:
             # TOOL 키워드 매칭
             fast_tools = {
                 "get_weather": ["날씨", "weather", "기온", "온도"],
-                "search_web": ["검색", "search", "뉴스", "news", "최신", "search_web"],
+                "search_web": ["검색", "search", "정보", "info", "search_web"],
+                "search_news": ["뉴스", "news", "최신", "기사", "article", "소식", "보도", "발표", "기사들", "search_news"],
                 "execute_command": ["version", "버전", "check", "확인", "실행", "run", "installed", "설치", "status", "환경"],
                 "get_current_time": ["시간", "time", "몇시", "date", "오늘"],
             }
@@ -147,11 +152,11 @@ class Brain:
                         cmd_targets = ["python", "uv", "pip", "node", "npm", "git", "docker", "system", "os"]
                         if any(t in user_lower for t in cmd_targets) or "ls" in user_lower or "dir" in user_lower:
                              # Argument는 Orchestrator/Falcon에게 위임 ("" 전달)
-                             return {"route": "TOOL", "specialist_prompt": "", "tool_hint": tool_name}
+                              return {"route": "TOOL", "specialist_prompt": user_input, "tool_hint": tool_name}
                     else:
                         # Argument는 Orchestrator/Falcon에게 위임 ("" 전달)
                         # 예: "서울 날씨" -> Prompt="" -> Falcon이 "Seoul" 추출
-                        return {"route": "TOOL", "specialist_prompt": "", "tool_hint": tool_name}
+                        return {"route": "TOOL", "specialist_prompt": user_input, "tool_hint": tool_name}
 
         # 컨텍스트 초기화
         if hasattr(self.model, "reset"):
@@ -189,32 +194,19 @@ class Brain:
         except (json.JSONDecodeError, ValueError):
             pass
         
-        # 파싱 실패 시 키워드 기반 폴백
-        user_lower = user_input.lower()
-        
-        # TOOL 키워드 우선 체크 (외부 정보 필요)
-        keywords_tool = {
-            "get_weather": ["날씨", "weather", "기온", "온도", "temperature"],
-            "search_web": ["검색", "search", "찾아봐", "알려줘", "뭐야", "누구", "최신", "search_web", "news", "뉴스"],
-            "get_current_time": ["시간", "time", "몇시", "날짜", "date", "오늘"],
-            "execute_command": ["확인", "check", "verify", "run", "version", "버전", "실행", "command", "ls", "dir", "환경", "environment", "setting", "status", "설치", "installed"],
-        }
-        for tool_name, keywords in keywords_tool.items():
-            if any(kw in user_lower for kw in keywords):
-                return {"route": "TOOL", "specialist_prompt": "", "tool_hint": tool_name}
-        
+        # [Fast Path] DIRECT 키워드 체크 (강력 추천)
+        direct_keywords = ["요약", "정리", "설명", "summarize", "explain", "translate", "번역", "안녕", "hello", "hi", "반가워"]
+        if any(kw in user_lower for kw in direct_keywords) and not is_creation:
+             return {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
+
         # REASONER 키워드 (순수 코딩만)
-        keywords_reasoner = ["코드", "함수", "구현", "알고리즘", "수학", "증명", "aime", "code", "function", "fibonacci", "script", "class"]
+        keywords_reasoner = ["함수", "알고리즘", "수학", "증명", "aime", "fibonacci", "script", "class"]
         
-        # 'python'이 포함되어도 'version'이나 'check'가 있으면 TOOL로 가야 함.
-        # 위에서 keywords_tool을 먼저 체크하므로, 'version'이 있으면 이미 TOOL로 리턴됨.
-        # 하지만 'python'만 있고 'version'이 없는 경우 (e.g. "python code for...")를 위해 reasoner에 'python'을 넣되,
-        # 'version'이 없을 때만 동작하도록 함.
-        
-        if "python" in user_lower and not any(k in user_lower for k in ["version", "check", "확인", "버전"]):
+        # 'python'이나 '코드'가 있으면 REASONER 가능성 높음
+        if ("python" in user_lower or "코드" in user_lower or "code" in user_lower) and not any(k in user_lower for k in ["version", "check", "확인", "버전", "summarize", "요약"]):
              return {"route": "REASONER", "specialist_prompt": user_input, "tool_hint": ""}
              
-        if any(kw in user_lower for kw in keywords_reasoner):
+        if any(kw in user_lower for kw in keywords_reasoner) and not any(kw in user_lower for kw in direct_keywords):
             return {"route": "REASONER", "specialist_prompt": user_input, "tool_hint": ""}
         
         return {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
@@ -228,7 +220,7 @@ class Brain:
             self.model.reset()
         
         # ChatML 포맷 수동 구성
-        sys_content = system_prompt or "You are a helpful assistant."
+        sys_content = system_prompt or "You are a helpful assistant. Always respond in Korean unless asked otherwise."
         prompt = f"""<|im_start|>system
 {sys_content}<|im_end|>
 <|im_start|>user
@@ -268,16 +260,15 @@ class Brain:
         except:
             pass
 
-        system_prompt = """You are a polite data reporter.
-The user asked a question. The tool provided the following FACTS.
+        system_prompt = """You are a Professional Data Integration Assistant.
+Your goal is to synthesize multiple task results into a single, comprehensive Korean report.
 
 YOUR JOB:
-1. Report the FACTS to the user.
-2. [Comparison Rules]
-   - IF the user asks to compare two DIFFERENT LOCATIONS (e.g. "Seoul vs Tokyo") and you have data for BOTH: DO COMPARE them directly based on the FACTS.
-   - IF the user asks for HISTORICAL data (e.g. "vs yesterday", "last week") and the FACTS don't have it: Say "Since I don't have historical data, I cannot compare with the past."
-3. DO NOT add any opinion, external info, or comparisons not in the FACTS.
-4. DO NOT mention "Daegu" or any other city not in the FACTS.
+1. READ ALL the facts below. 
+2. DO NOT skip any data point. If multiple items (e.g. news articles) are listed, YOU MUST report on all of them.
+3. [CRITICAL] YOU MUST INCLUDE THE ACTUAL URLs/LINKS in the report. DO NOT USE PLACEHOLDERS like [link]. COPY THE URL from the facts below.
+4. If a tool failed or data is missing for some items, explicitly state that.
+5. ALWAYS write the final response in KOREAN (한국어).
 
 FACTS:
 """ + formatted_output
@@ -347,7 +338,11 @@ Output:
         # [Fallback] 휴리스틱/Regex 분해 (LLM 실패 시)
         # "서울과 도쿄" -> ["서울", "도쿄"] -> ["서울 날씨", "도쿄 날씨"] (날씨가 포함된 경우)
         import re
-        topic = "weather" if any(k in user_input for k in ["날씨", "weather"]) else ""
+        topic = ""
+        if any(k in user_input for k in ["날씨", "weather"]):
+            topic = "날씨"
+        elif any(k in user_input for k in ["뉴스", "news", "기사", "article", "소식"]):
+            topic = "뉴스"
         
         # Regex로 분리 (와/과/랑/이랑/vs/and/,)
         # \s*는 공백이 있을수도 없을수도 있음을 의미
@@ -356,7 +351,9 @@ Output:
         # \s*는 공백이 있을수도 없을수도 있음을 의미
         # (?: ... )는 비캡처 그룹
         # ? 문자로도 분리 (질문이 여러 개인 경우)
-        split_pattern = r"\s*(?:vs|and|,|와|과|랑|이랑|\?)\s*"
+        # Regex로 분리 (와/과/랑/이랑/vs/and/,)
+        # [Fix] More inclusive pattern for connectors
+        split_pattern = r"\s+(?:vs|and|&|or|또는|그리고|와|과|랑|이랑)\s+|\s*,\s*|\s*\?\s*"
         
         parts = re.split(split_pattern, user_input)
         
@@ -374,8 +371,8 @@ Output:
                 
                 if not clean_p: continue
                 
-                # "도쿄 날씨" 처럼 날씨가 이미 포함된 경우 중복 방지
-                if topic and topic not in clean_p and "날씨" not in clean_p:
+                # "도쿄 날씨" 처럼 날씨/뉴스가 이미 포함된 경우 중복 방지
+                if topic and topic not in clean_p and "날씨" not in clean_p and "뉴스" not in clean_p and "기사" not in clean_p:
                      q = f"{clean_p} {topic}".strip()
                 else:
                      q = clean_p

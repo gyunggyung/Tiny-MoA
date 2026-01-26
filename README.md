@@ -85,6 +85,9 @@ uv run python -m tiny_moa.main --query "서울 날씨 어때?"
 
 # 대화형 모드
 uv run python -m tiny_moa.main --interactive
+
+# 파일 참조
+uv run python -m tiny_moa.main --query "@[1706.03762v7-split.pdf] 이 논문의 주요 아이디어가 뭐야?"
 ```
 
 ### pip 환경 사용

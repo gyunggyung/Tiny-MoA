@@ -35,7 +35,8 @@ class RAGEngine:
         if not path.exists():
             return f"Error: File not found {file_path}"
             
-        print(f"[RAG] Processing file: {path.name}")
+        # [Clean] Show processing log only once or in a structured way
+        # print(f"[RAG] Processing file: {path.name}") # Removed to reduce noise
         
         # 1. Convert to Markdown
         converter = self._get_converter()

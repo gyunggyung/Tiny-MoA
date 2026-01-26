@@ -35,11 +35,21 @@ class LazyVectorStore:
             
             import chromadb
             from chromadb.utils import embedding_functions
+            from chromadb.config import Settings
             
             # Persistent Client (데이터 저장)
             db_path = Path("rag_storage")
             db_path.mkdir(exist_ok=True)
-            self._client = chromadb.PersistentClient(path=str(db_path))
+            
+            # [Fix] Disable Telemetry to avoid Capture error and clean terminal
+            self._client = chromadb.PersistentClient(
+                path=str(db_path),
+                settings=Settings(anonymized_telemetry=False)
+            )
+            
+            # [Fix] Silence repetitive ChromaDB system logs
+            logging.getLogger('chromadb.telemetry').setLevel(logging.ERROR)
+            logging.getLogger('chromadb.db.index.hnswlib').setLevel(logging.ERROR)
             
             # Embedding Function (all-MiniLM-L6-v2: Small, Fast)
             # Default is all-MiniLM-L6-v2 which is great for CPU
@@ -63,8 +73,9 @@ class LazyVectorStore:
         if not documents:
             return
             
-        print(f"[RAG] Adding {len(documents)} chunks to DB...")
-        self._collection.add(
+        print(f"[RAG] Updating/Adding {len(documents)} chunks to DB...")
+        # Use upsert to avoid "existing embedding ID" warnings
+        self._collection.upsert(
             documents=documents,
             metadatas=metadatas,
             ids=ids
