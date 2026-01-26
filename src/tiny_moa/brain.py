@@ -31,12 +31,12 @@ LFM_THINKING_PARAMS = {
 ROUTER_SYSTEM_PROMPT = """You are a task router. Analyze the user's request and decide how to handle it.
 
 Available specialists:
-- REASONER: STRICTLY for coding tasks (Python implementation) and complex math problems only. Do NOT use for search or general questions.
-- TOOL: For ANY requests requiring external information (weather, news, definitions), checking system status, verify commands, or real-time data.
+- REASONER: STRICTLY for pure coding tasks (writing Python functions/classes) and complex math problems only. Do NOT use for "checking versions", "verifying installation", or "system status".
+- TOOL: For ANY requests requiring external information (weather, news, definitions), checking system status, verify commands, real-time data, or checking installed packages.
 - DIRECT: For general conversation, greetings, translations, and internal knowledge.
 
 Respond with a JSON object:
-{"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "optimized search keywords for TOOL. For 'execute_command', provide the EXACT shell command (e.g., 'uv --version'). Do NOT provide descriptions.", "tool_hint": "tool name if TOOL route"}
+{"route": "REASONER" or "TOOL" or "DIRECT", "specialist_prompt": "optimized search keywords for TOOL. For 'execute_command', provide the EXACT shell command (e.g., 'uv --version', 'python --version'). Do NOT provide natural language descriptions or markdown blocks for commands.", "tool_hint": "tool name if TOOL route"}
 
 Examples:
 - "피보나치 함수 작성해줘" → {"route": "REASONER", "specialist_prompt": "Write a Python function for Fibonacci sequence", "tool_hint": ""}
@@ -44,6 +44,7 @@ Examples:
 - "아인슈타인 최신 정보" → {"route": "TOOL", "specialist_prompt": "Albert Einstein latest news", "tool_hint": "search_news"}
 - "uv가 뭐야?" → {"route": "TOOL", "specialist_prompt": "what is uv python tool", "tool_hint": "search_web"}
 - "지금 프로젝트에 uv 적용됐는지 확인해봐" → {"route": "TOOL", "specialist_prompt": "uv --version", "tool_hint": "execute_command"}
+- "현재 파이썬 버전 알려줘" → {"route": "TOOL", "specialist_prompt": "python --version", "tool_hint": "execute_command"}
 """
 
 
@@ -111,6 +112,38 @@ class Brain:
         Returns:
             {"route": "REASONER" | "DIRECT", "specialist_prompt": str}
         """
+        user_lower = user_input.lower()
+        
+        # [Fast Path] 키워드 기반 즉시 라우팅 (LLM 호출 전)
+        # 명백한 도구 요청("날씨", "버전 확인")은 LLM을 거치지 않고 바로 처리하여 속도/정확도 향상
+        
+        # 1. 코딩/창작 관련 키워드가 있으면 Fast Path 건너뜀 (REASONER 가능성)
+        creation_keywords = ["write", "code", "create", "generate", "function", "script", "class", "impl", "작성", "만들", "구현", "짜줘"]
+        is_creation = any(k in user_lower for k in creation_keywords)
+        
+        if not is_creation:
+            # TOOL 키워드 매칭
+            fast_tools = {
+                "get_weather": ["날씨", "weather", "기온", "온도"],
+                "search_web": ["검색", "search", "뉴스", "news", "최신", "search_web"],
+                "execute_command": ["version", "버전", "check", "확인", "실행", "run", "installed", "설치", "status", "환경"],
+                "get_current_time": ["시간", "time", "몇시", "date", "오늘"],
+            }
+            
+            for tool_name, keywords in fast_tools.items():
+                if any(kw in user_lower for kw in keywords):
+                    # execute_command의 경우 추가 검증
+                    if tool_name == "execute_command":
+                        # "python version", "check uv" 등은 확실한 명령
+                        cmd_targets = ["python", "uv", "pip", "node", "npm", "git", "docker", "system", "os"]
+                        if any(t in user_lower for t in cmd_targets) or "ls" in user_lower or "dir" in user_lower:
+                             # Argument는 Orchestrator/Falcon에게 위임 ("" 전달)
+                             return {"route": "TOOL", "specialist_prompt": "", "tool_hint": tool_name}
+                    else:
+                        # Argument는 Orchestrator/Falcon에게 위임 ("" 전달)
+                        # 예: "서울 날씨" -> Prompt="" -> Falcon이 "Seoul" 추출
+                        return {"route": "TOOL", "specialist_prompt": "", "tool_hint": tool_name}
+
         # 컨텍스트 초기화
         if hasattr(self.model, "reset"):
             self.model.reset()
@@ -155,14 +188,23 @@ class Brain:
             "get_weather": ["날씨", "weather", "기온", "온도", "temperature"],
             "search_web": ["검색", "search", "찾아봐", "알려줘", "뭐야", "누구", "최신", "search_web", "news", "뉴스"],
             "get_current_time": ["시간", "time", "몇시", "날짜", "date", "오늘"],
-            "execute_command": ["확인", "check", "verify", "run", "version", "버전", "실행", "command", "ls", "dir"],
+            "execute_command": ["확인", "check", "verify", "run", "version", "버전", "실행", "command", "ls", "dir", "환경", "environment", "setting", "status", "설치", "installed"],
         }
         for tool_name, keywords in keywords_tool.items():
             if any(kw in user_lower for kw in keywords):
                 return {"route": "TOOL", "specialist_prompt": "", "tool_hint": tool_name}
         
-        # REASONER 키워드
-        keywords_reasoner = ["코드", "함수", "구현", "python", "알고리즘", "수학", "증명", "aime", "code", "function", "fibonacci"]
+        # REASONER 키워드 (순수 코딩만)
+        keywords_reasoner = ["코드", "함수", "구현", "알고리즘", "수학", "증명", "aime", "code", "function", "fibonacci", "script", "class"]
+        
+        # 'python'이 포함되어도 'version'이나 'check'가 있으면 TOOL로 가야 함.
+        # 위에서 keywords_tool을 먼저 체크하므로, 'version'이 있으면 이미 TOOL로 리턴됨.
+        # 하지만 'python'만 있고 'version'이 없는 경우 (e.g. "python code for...")를 위해 reasoner에 'python'을 넣되,
+        # 'version'이 없을 때만 동작하도록 함.
+        
+        if "python" in user_lower and not any(k in user_lower for k in ["version", "check", "확인", "버전"]):
+             return {"route": "REASONER", "specialist_prompt": user_input, "tool_hint": ""}
+             
         if any(kw in user_lower for kw in keywords_reasoner):
             return {"route": "REASONER", "specialist_prompt": user_input, "tool_hint": ""}
         
@@ -202,20 +244,46 @@ class Brain:
         """
         Specialist 출력을 사용자에게 맞게 통합/포맷팅
         """
-        system_prompt = """You are a helpful assistant. 
-The user asked a question and a specialist provided the following answer.
-Present this answer clearly to the user in their language (Korean if they asked in Korean).
-Do not add unnecessary explanations, just format the answer nicely."""
-        
+        # Tool output이 dict string일 경우 보기 좋게 변환 시도
+        formatted_output = specialist_output
+        try:
+            import json
+            if isinstance(specialist_output, str) and "{" in specialist_output:
+                # 작은 모델은 JSON보다 Key-Value 리스트를 더 잘 이해함
+                data = eval(specialist_output) if "{" in specialist_output else {} # safe eval for dict string
+                if isinstance(data, dict):
+                    lines = []
+                    for k, v in data.items():
+                        lines.append(f"- {k}: {v}")
+                    formatted_output = "\n".join(lines)
+        except:
+            pass
+
+        system_prompt = """You are a polite data reporter.
+The user asked a question. The tool provided the following FACTS.
+
+YOUR JOB:
+1. Report the FACTS to the user.
+2. If the user asks for a comparison (e.g. "vs yesterday") but the FACTS don't have it, say "Since I don't have historical data, I cannot compare."
+3. DO NOT add any opinion, external info, or comparisons not in the FACTS.
+4. DO NOT mention "Daegu" or any other city not in the FACTS.
+
+FACTS:
+""" + formatted_output
+
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"User question: {user_input}\n\nSpecialist answer:\n{specialist_output}"},
+            {"role": "user", "content": f"User Question: {user_input}\n\nPlease write the answer response:"},
         ]
+        
+        # Temperature 0.1로 창의성 억제
+        params = self.params.copy()
+        params["temperature"] = 0.1
         
         response = self.model.create_chat_completion(
             messages=messages,
-            max_tokens=1024,
-            **self.params,
+            max_tokens=512,
+            **params,
         )
         
         return response["choices"][0]["message"]["content"]

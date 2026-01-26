@@ -58,3 +58,5 @@ output/
 
 # Note: uv.lock은 GitHub에 올림 (의존성 잠금 파일)
 
+#tests 
+tests/

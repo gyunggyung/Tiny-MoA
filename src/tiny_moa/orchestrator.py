@@ -30,7 +30,7 @@ try:
 except ImportError:
     TRANSLATION_AVAILABLE = False
 
-console = Console()
+console = Console(force_terminal=True, color_system="auto")
 
 
 class TinyMoA:
@@ -232,7 +232,7 @@ class TinyMoA:
                 console.print(f"[yellow]⚠️ Tool 파싱 실패: {tool_call['error']}[/yellow]")
             return self.brain.direct_respond(user_input)
         
-        # 2. Tool 실행
+        # 2. Tool 실행 (Retry Logic)
         tool_name = tool_call.get("name", "")
         arguments = tool_call.get("arguments", {})
         
@@ -244,29 +244,80 @@ class TinyMoA:
         if verbose:
             console.print(Panel(
                 JSON.from_data(result),
-                title=f"[bold cyan]🔧 {tool_name} 결과[/bold cyan]",
-                border_style="cyan",
+                title=f"[bold cyan]🔧 {tool_name} { '성공' if result.get('success') else '실패' }[/bold cyan]",
+                border_style="cyan" if result.get("success") else "red",
             ))
         
-        # 3. Brain으로 결과 포맷팅
+        # 3. Brain으로 결과 포맷팅 or 재시도
         if result.get("success", False):
             tool_result = result.get("result", {})
-            format_prompt = f"""User asked: "{user_input}"
-
-Tool "{tool_name}" returned this result:
-{tool_result}
-
-Please provide a natural, helpful response to the user in their language (Korean if they asked in Korean).
-Be concise and format the information nicely."""
-            
-            return self.brain.direct_respond(
-                format_prompt,
-                system_prompt="You are a helpful assistant presenting tool results to users."
-            )
+            # Brain의 integrate_response를 사용하여 환각 방지 및 포맷팅 적용
+            return self.brain.integrate_response(user_input, str(tool_result))
         else:
-            # Tool 실패
+            # Tool 실패 -> 재시도 (Retry)
             error = result.get("error", "Unknown error")
-            return f"죄송합니다. 정보를 가져오는 데 실패했습니다: {error}"
+            
+            # 모든 Tool 실패 시 1회 재시도 (Brain에게 수정 요청)
+            if "retry" not in arguments: # 무한 루프 방지
+                if verbose:
+                    console.print(f"[bold red]⚠️ 실행 실패: {error}. Brain에게 수정을 요청합니다...[/bold red]")
+                
+                # Brain에게 수정을 요청하는 프롬프트
+                retry_prompt = f"""The tool '{tool_name}' failed with arguments '{arguments}'
+Error: "{error}".
+The user wants to: "{user_input}".
+Please provide CORRECTED arguments for the tool '{tool_name}' to fix this error.
+Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "python --version"}}). Do NOT explain."""
+
+                corrected_args_str = self.brain.direct_respond(
+                    retry_prompt, 
+                    system_prompt="You are a tool expert. Provide only the corrected JSON arguments."
+                ).strip()
+                
+                # 마크다운/JSON 파싱 시도
+                corrected_args_str = corrected_args_str.replace("```json", "").replace("```", "").strip()
+                
+                try:
+                    import json
+                    # 단순 문자열인 경우(예: command string) 처리
+                    if not corrected_args_str.startswith("{"):
+                         # execute_command라면 문자열을 command로 간주
+                         if tool_name == "execute_command":
+                             retry_args = {"command": corrected_args_str}
+                         else:
+                             # 다른 툴은 location 등 키를 알기 어려우므로 JSON 파싱 재시도하거나 포기
+                             # 여기서는 간단히 location이나 query로 가정하는 휴리스틱 추가 가능하나,
+                             # Brain이 JSON을 주도록 프롬프트했으므로 일단 JSON 로드 시도
+                             pass
+                    
+                    if corrected_args_str.startswith("{"):
+                        retry_args = json.loads(corrected_args_str)
+                        retry_args["retry"] = True # 재귀 방지 플래그
+                        
+                        if verbose:
+                            console.print(f"[dim]🧠 Brain 수정 제안: {retry_args}[/dim]")
+
+                        retry_result = self.tool_executor.execute(tool_name, retry_args)
+                        
+                        if verbose:
+                            console.print(Panel(
+                                JSON.from_data(retry_result),
+                                title=f"[bold cyan]🔧 재시도 결과[/bold cyan]",
+                                border_style="cyan" if retry_result.get("success") else "red",
+                            ))
+                            
+                        if retry_result.get("success"):
+                            # 성공 시 포맷팅 후 반환
+                            tool_result = retry_result.get("result", {})
+                            # Brain의 integrate_response를 사용하여 환각 방지 및 포맷팅 적용
+                            return self.brain.integrate_response(user_input, str(tool_result))
+                        else:
+                            error = retry_result.get("error", error)
+                except Exception as e:
+                    if verbose:
+                        console.print(f"[dim]⚠️ 재시도 파싱 실패: {e}[/dim]")
+
+            return f"죄송합니다. 명령 실행에 실패했습니다.\n오류: {error}"
     
     def _infer_tool_from_keywords(self, user_input: str, tool_hint: str = "") -> dict:
         """키워드 기반 Tool 호출 추론 (모델 없이)"""

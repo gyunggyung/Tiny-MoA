@@ -19,7 +19,10 @@ FALCON_R_PARAMS = {
 }
 
 # Reasoning 시스템 프롬프트 (간결하게)
-REASONING_SYSTEM_PROMPT = """You are a coding and math assistant. Write clean Python code or solve math problems step by step."""
+REASONING_SYSTEM_PROMPT = """You are a coding and math assistant. Write clean Python code or solve math problems step by step.
+IMPORTANT: You have NO access to the internet, current time, or system status.
+If the user asks for external information (e.g. "what is the date", "check current folder", "latest news"), you must explicitly state that you cannot verify that information.
+DO NOT hallucinate or make up facts about the current environment."""
 
 
 class Reasoner:
