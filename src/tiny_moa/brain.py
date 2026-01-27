@@ -274,19 +274,27 @@ class Brain:
         # [English-First Strategy]
         # 품질과 속도를 위해 먼저 영어로 생성하고, 나중에 번역기가 한국어로 변환합니다.
         # "Reasoning" 오버헤드를 줄이기 위해 단순하고 명확한 영어 지시를 사용합니다.
-        system_prompt = """Based on the gathered data, provide a **concise weather report**.
+        
+        # [Fix] Hardcoded weather prompt removed. Now using a generic prompt.
+        system_prompt = f"""You are a helpful assistant.
+Goal: Answer the user's request based on the gathered data.
 
 [Rules]
-1. Output in **English** (will be translated later).
-2. Use the format: "City: Condition, Temperature"
-3. Keep the numeric values exactly as they are.
-4. Do not include any introductory or concluding remarks. Just the list.
-5. **Report for ALL items found in the data. Do NOT skip any city.**
+1. 역할을 수행하지 말고, 그냥 아래 데이터를 번역해서 리스트로 만드세요.
+2. 절대 요약하지 마세요.
+3. 각 항목을 다음 형식으로 한 줄씩 출력하세요:
+   `* 제목 - 내용 (원본링크: URL)`
+4. URL을 절대 생략하지 마세요.
+5. 서론, 결론, 인사말 절대 금지. 오직 리스트만 출력.
 
 [Example]
-Seoul: Sunny, -7°C
-Tokyo: Cloudy, 5°C
-London: rain, 6°C
+* 딥마인드 뉴스 - 내용 요약 (원본링크: https://url...)
+* 오픈AI 소식 - 내용 요약 (원본링크: https://url...)
+
+
+
+User Request: "{user_input}"
+Data:
 """ + formatted_output
 
         messages = [

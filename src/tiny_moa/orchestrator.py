@@ -591,13 +591,9 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                             final_response = self._translation_pipeline.from_english(final_response, target_lang_ctx)
                         except Exception as e:
                             logger.error(f"Translation failed: {e}")
-                        if verbose:
-                            console.print(f"[dim]🌐 최종 번역: en → {target_lang_ctx.original_lang}[/dim]")
-                            console.print(Panel(
-                                Markdown(final_response),
-                                title="[bold green]💬 번역된 응답[/bold green]",
-                                border_style="green",
-                            ))
+                # [Optimization] Skip translation to prevent over-summarization and URL loss.
+                # The Brain is now instructed to output Korean directly.
+                translated_response = final_response
 
                 return final_response
 
@@ -698,7 +694,7 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
         fh.setFormatter(formatter)
         logger.addHandler(fh)
-        return logger
+        return logger, fh
 
     def run_cowork_flow(self, user_goal: str, workspace_root: str = ".", use_tui: bool = True) -> str:
         """
@@ -716,7 +712,8 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         from src.tiny_moa.cowork.workers.tool_worker import ToolWorker
         from rich.live import Live
 
-        logger = self._setup_cowork_logger()
+        # [Fix] Keep reference to handler for cleanup
+        logger, log_handler = self._setup_cowork_logger()
         logger.info(f"--- Starting Cowork Session: {user_goal} ---")
 
         workspace = WorkspaceContext(workspace_root)
@@ -947,6 +944,11 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
             self.dashboard = None
             if use_tui: live.stop()
             raise e
+        finally:
+            # [Fix] Clean up log handler
+            if log_handler:
+                log_handler.close()
+                logger.removeHandler(log_handler)
 
 
 def interactive_mode():

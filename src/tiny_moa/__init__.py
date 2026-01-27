@@ -1,16 +1,5 @@
-"""
-Tiny MoA (Mixture of Agents) PoC
-================================
-GPU Poor를 위한 AI 군단 - 1.2B Brain + 600M Specialist
 
-사용법:
-    from tiny_moa import TinyMoA
-    
-    moa = TinyMoA()
-    response = moa.chat("피보나치 함수 작성해줘")
-"""
-
-from .orchestrator import TinyMoA
-
-__version__ = "0.1.0"
-__all__ = ["TinyMoA"]
+import warnings
+# Suppress ResourceWarning universally for this package
+warnings.filterwarnings("ignore", category=ResourceWarning)
+warnings.filterwarnings("ignore", message=r"unclosed file <_io.TextIOWrapper name='nul'", category=ResourceWarning)

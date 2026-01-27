@@ -6,8 +6,14 @@ python -m tiny_moa.main [--interactive]
 
 import argparse
 import warnings
+import sys
+
 # Suppress ResourceWarning: unclosed file <_io.TextIOWrapper ...>
 warnings.filterwarnings("ignore", category=ResourceWarning)
+# Specific filter for the likely Windows 'nul' issue (RegEx escaped)
+warnings.filterwarnings("ignore", message=r"unclosed file <_io.TextIOWrapper name='nul'", category=ResourceWarning)
+# Catch-all for cp949 encoding issue often seen on Korean Windows
+warnings.filterwarnings("ignore", message=r".*cp949.*", category=ResourceWarning)
 
 from tiny_moa.orchestrator import TinyMoA, interactive_mode
 from rich.console import Console
