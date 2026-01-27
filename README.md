@@ -9,6 +9,8 @@
 [![uv](https://img.shields.io/badge/uv-0.9+-purple.svg)](https://github.com/astral-sh/uv)
 [![Status](https://img.shields.io/badge/Status-PoC-yellow.svg)]()
 
+![Tiny MoA Demo](docs/img/tiny-moa-demo.gif)
+
 ---
 
 ## ✨ 주요 기능
