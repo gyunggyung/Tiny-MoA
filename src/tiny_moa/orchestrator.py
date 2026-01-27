@@ -232,6 +232,21 @@ class TinyMoA:
                     console.print("[dim]🔧 키워드 기반 Tool 추론 중...[/dim]")
                 tool_call = self._infer_tool_from_keywords(user_input, tool_hint)
         
+        # [Critical Fix] Validate arguments against tool definition to prevent "unexpected keyword" errors
+        if tool_call and "name" in tool_call and "arguments" in tool_call:
+            t_name = tool_call["name"]
+            t_args = tool_call["arguments"]
+            
+            # search_web does not accept 'location', only 'query'
+            if t_name in ["search_web", "search_news"] and "location" in t_args and "query" not in t_args:
+                if verbose: console.print(f"[yellow]⚠️ Fixing invalid argument for {t_name}: location -> query[/yellow]")
+                t_args["query"] = t_args.pop("location")
+            
+            # get_weather does not accept 'query', only 'location'
+            if t_name == "get_weather" and "query" in t_args and "location" not in t_args:
+                if verbose: console.print(f"[yellow]⚠️ Fixing invalid argument for {t_name}: query -> location[/yellow]")
+                t_args["location"] = t_args.pop("query")
+
         if "error" in tool_call:
             if verbose:
                 console.print(f"[yellow]⚠️ Tool 파싱 실패: {tool_call['error']}[/yellow]")
@@ -582,18 +597,24 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                     return final_response
 
                 if self.enable_translation and self._translation_pipeline and isinstance(final_response, str):
-                    # 이미 decomposed된 쿼리는 내부적으로 번역되어 처리되었음.
-                    # 최종 결과만 번역하면 됨.
-                    # 단, 타겟 언어를 알기 위해 user_input 감지 필요
-                    target_lang_ctx = self._translation_pipeline.to_english(user_input)
-                    if target_lang_ctx.is_translated:
-                        try:
+                    # Brain now outputs English, so we MUST translate to original language.
+                    # Attempt to detect language from the original user_input.
+                    try:
+                        # Re-detect context if not available (since this is inside decomposition block)
+                        target_lang_ctx = self._translation_pipeline.to_english(user_input)
+                        
+                        if target_lang_ctx.is_translated:
+                            # User spoke non-English (e.g. Korean), translate back
                             final_response = self._translation_pipeline.from_english(final_response, target_lang_ctx)
-                        except Exception as e:
-                            logger.error(f"Translation failed: {e}")
-                # [Optimization] Skip translation to prevent over-summarization and URL loss.
-                # The Brain is now instructed to output Korean directly.
-                translated_response = final_response
+                        else:
+                            # User spoke English (or detection failed).
+                            # If the system policy enforces Korean, we might consider forcing translation here.
+                            # However, the standard logic is to respect the input language or explicit user instruction.
+                            # For now, we maintain the "Return in Original Language" policy.
+                            pass
+
+                    except Exception as e:
+                        logger.error(f"Translation logic failed: {e}")
 
                 return final_response
 
@@ -700,16 +721,16 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         """
         Tiny Cowork v2.0 실행 (TUI & Parallel 지원)
         """
-        from src.tiny_moa.cowork.workspace import WorkspaceContext
-        from src.tiny_moa.cowork.task_queue import TaskQueue, TaskStatus
-        from src.tiny_moa.cowork.planner import PlannerAgent
-        from src.tiny_moa.cowork.skills.file_skills import CoworkFileSkill
-        from src.tiny_moa.ui.dashboard import CoworkDashboard
-        from src.tiny_moa.cowork.parallel_runner import ParallelRunner
-        from src.tiny_moa.cowork.workers.researcher import ResearchWorker
-        from src.tiny_moa.cowork.workers.writer import WriterWorker
-        from src.tiny_moa.cowork.workers.brain_worker import BrainWorker
-        from src.tiny_moa.cowork.workers.tool_worker import ToolWorker
+        from tiny_moa.cowork.workspace import WorkspaceContext
+        from tiny_moa.cowork.task_queue import TaskQueue, TaskStatus
+        from tiny_moa.cowork.planner import PlannerAgent
+        from tiny_moa.cowork.skills.file_skills import CoworkFileSkill
+        from tiny_moa.ui.dashboard import CoworkDashboard
+        from tiny_moa.cowork.parallel_runner import ParallelRunner
+        from tiny_moa.cowork.workers.researcher import ResearchWorker
+        from tiny_moa.cowork.workers.writer import WriterWorker
+        from tiny_moa.cowork.workers.brain_worker import BrainWorker
+        from tiny_moa.cowork.workers.tool_worker import ToolWorker
         from rich.live import Live
 
         # [Fix] Keep reference to handler for cleanup

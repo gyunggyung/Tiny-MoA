@@ -259,60 +259,153 @@ class Brain:
         # Tool output이 dict string일 경우 보기 좋게 변환 시도
         formatted_output = specialist_output
         try:
-            import json
-            if isinstance(specialist_output, str) and "{" in specialist_output:
-                # 작은 모델은 JSON보다 Key-Value 리스트를 더 잘 이해함
-                data = eval(specialist_output) if "{" in specialist_output else {} # safe eval for dict string
-                if isinstance(data, dict):
-                    lines = []
-                    for k, v in data.items():
-                        lines.append(f"- {k}: {v}")
-                    formatted_output = "\n".join(lines)
-        except:
-            pass
+            # [Parsing Strategy]
+            # input_data might be a single JSON string OR a multi-task Cowork format:
+            # "[TASK: ...]\nDATA: {'...'} \n\n [TASK: ...]"
+            
+            import re
+            
+            sections = []
+            # Check for Cowork format
+            if "[TASK:" in specialist_output and "DATA:" in specialist_output:
+                # Split by [TASK: ...] blocks
+                raw_sections = re.split(r"\[TASK:.*?\]", specialist_output)
+                for raw in raw_sections:
+                    if "DATA:" in raw:
+                        # Extract JSON part after "DATA:"
+                        json_str = raw.split("DATA:", 1)[1].strip()
+                        try:
+                            data = eval(json_str)
+                            sections.append(data)
+                        except:
+                            pass
+            else:
+                # Try parsing as single JSON
+                try:
+                    data = eval(specialist_output) if "{" in specialist_output else {}
+                    if isinstance(data, dict):
+                         sections.append(data)
+                except:
+                    pass
+
+            # [Deterministic Formatting]
+            final_formatted_blocks = []
+            for data in sections:
+                if not isinstance(data, dict): continue
+                
+                # Unwrap 'result' if present (Cowork Tool Result wrapper)
+                # {'success': True, 'tool': 'search_news', 'result': {'results': [...]}}
+                inner = data.get("result", data) 
+                if not isinstance(inner, dict): inner = data # Fallback
+
+                # 1. Search/News Results
+                # Check both 'results' (direct) and 'inner["results"]'
+                target_data = inner if "results" in inner else data
+                
+                if "results" in target_data and isinstance(target_data["results"], list):
+                    block_lines = []
+                    # Add query as header if available
+                    q = target_data.get("query", "")
+                    if q: block_lines.append(f"results for '{q}':")
+                    
+                    for item in target_data["results"]:
+                        if isinstance(item, dict):
+                            title = item.get("title", "No Title")
+                            url = item.get("url", item.get("link", ""))
+                            snippet = item.get("snippet", item.get("description", ""))
+                            # Clean snippet
+                            snippet = snippet.replace("\n", " ")[:200]
+                            # Format: * Title
+                            #           Summary...
+                            #           Link: [Click to Read](URL)
+                            # Using Markdown link syntax prevents long URL text from wrapping and breaking in TUI.
+                            # Rich will render this as a clickable alias.
+                            block_lines.append(f"* {title}\n  {snippet}\n  🔗 [Click to Read]({url})")
+                    if block_lines:
+                        final_formatted_blocks.append("\n".join(block_lines))
+                        continue
+
+                # 2. Weather Results
+                # {'location': 'Seoul', 'temperature': ...}
+                target_data = inner if "temperature" in inner else data
+                if "temperature" in target_data and "condition" in target_data:
+                    location = target_data.get("location", "City")
+                    temp = target_data.get("temperature", "")
+                    cond = target_data.get("condition", "")
+                    final_formatted_blocks.append(f"* {location} Weather - {temp} / {cond}")
+                    continue
+                
+                # 3. Fallback (Generic Dict)
+                fallback_lines = []
+                for k, v in target_data.items():
+                    if isinstance(v, (str, int, float, bool)):
+                        fallback_lines.append(f"- {k}: {v}")
+                if fallback_lines:
+                    final_formatted_blocks.append("\n".join(fallback_lines))
+
+            if final_formatted_blocks:
+                # If we achieved deterministic formatting, return it!
+                # This bypasses the Hallucinating Brain.
+                return "\n\n".join(final_formatted_blocks)
+
+            # If formatting failed (empty), fallback to original string behavior (Legacy)
+            # but usually sections would handle it.
+            if not final_formatted_blocks and sections:
+                 # Should not happen if sections populated, but just in case
+                 formatted_output = str(sections)
+        except Exception:
+            pass # Continue to LLM if no deterministic output (unlikely for Search/Weather)
 
         # [English-First Strategy]
-        # 품질과 속도를 위해 먼저 영어로 생성하고, 나중에 번역기가 한국어로 변환합니다.
-        # "Reasoning" 오버헤드를 줄이기 위해 단순하고 명확한 영어 지시를 사용합니다.
+        # Generate in English first for speed and quality, then translate later.
         
-        # [Fix] Hardcoded weather prompt removed. Now using a generic prompt.
-        system_prompt = f"""You are a helpful assistant.
-Goal: Answer the user's request based on the gathered data.
+        system_prompt = f"""You are a formatter. 
+Your goal is to fill the provided data into the format below.
 
-[Rules]
-1. 역할을 수행하지 말고, 그냥 아래 데이터를 번역해서 리스트로 만드세요.
-2. 절대 요약하지 마세요.
-3. 각 항목을 다음 형식으로 한 줄씩 출력하세요:
-   `* 제목 - 내용 (원본링크: URL)`
-4. URL을 절대 생략하지 마세요.
-5. 서론, 결론, 인사말 절대 금지. 오직 리스트만 출력.
+[STRICT FORMATTING RULES]
+1. OUTPUT IN ENGLISH ONLY. Do NOT translate to Korean here.
+2. Use the data provided in the 'Data' section.
+3. OUTPUT MUST BE A BULLET LIST.
+4. NO INTRO, NO OUTRO.
+5. NEVER ALTER URLS. COPY THEM EXACTLY AS IS. Do not remove IDs or query parameters.
 
-[Example]
-* 딥마인드 뉴스 - 내용 요약 (원본링크: https://url...)
-* 오픈AI 소식 - 내용 요약 (원본링크: https://url...)
+[TARGET FORMATS]
+For WEATHER:
+* City Weather - Temp / Condition
+(Use data like 'temperature' and 'condition' from input)
 
+For SEARCH/NEWS:
+* Title - Summary (Link: URL)
+!!! CRITICAL: YOU MUST INCLUDE THE FULL, EXACT URL FOR EVERY SEARCH RESULT !!!
+Format: `* [Title] - [Summary] (Link: [URL])`
+Example: `* AI News - content... (Link: https://example.com/article/ar-12345)`
 
+[Data]
+{formatted_output}
 
-User Request: "{user_input}"
-Data:
-""" + formatted_output
+[User Request]
+{user_input}
+
+[Your Output]
+""" 
 
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "위 데이터를 한국어로 변환하여 출력해:"},
+            {"role": "system", "content": "You are a helpful assistant. Output only the formatted list."},
+            {"role": "user", "content": system_prompt},
         ]
         
-        # [Stability Fix] 컨텍스트 초기화
+        # [Stability Fix] Reset context
         if hasattr(self.model, "reset"):
             self.model.reset()
         
-        # Temperature 0.1로 창의성 억제
-        params = self.params.copy()
+        # [Performance Optimization] Use INSTRUCT params (Fast, No Thinking)
+        # We explicitly use LFM_INSTRUCT_PARAMS here regardless of self.use_thinking
+        params = LFM_INSTRUCT_PARAMS.copy()
         
         try:
             response = self.model.create_chat_completion(
                 messages=messages,
-                max_tokens=params.get("max_tokens", 4096), # Increase token limit further
+                max_tokens=params.get("max_tokens", 4096), 
                 **params,
             )
             
@@ -349,45 +442,68 @@ Data:
 
         try:
             # LLM Prompt for Decomposition
+            # [Critical Fix] Prevent splitting simple tasks into steps. 
+            # We want Tool PARALLELIZATION, not Step-by-Step planning.
             prompt = f"""<|startoftext|>
-Task: Split the following query into a list of independent sub-tasks.
+Task: detailed analysis of whether to split the query.
 Query: "{user_input}"
 
 Rules:
-1. One task per line.
-2. NO bullets, NO numbers, NO explanations.
-3. Keep it simple.
-4. If the query asks for comparison, split by entity.
-5. Example: "Seoul and Tokyo weather" ->
+1. ONLY split if the user asks for TWO DIFFERENT things (e.g. "Seoul AND Tokyo").
+2. Do NOT split a single request into "Check" and "Provide". That is redundant.
+3. If it's a single location/topic, return the original query as the ONLY line.
+
+Examples:
+"Seoul weather" ->
+Seoul weather
+
+"Seoul and Tokyo weather" ->
 Seoul weather
 Tokyo weather
 
-{user_input}<|im_end|>
-<|im_start|>assistant
+"Check weather in Seoul" ->
+Check weather in Seoul
+
+"Seoul weather?" ->
+Seoul weather
+
+User: "{user_input}"
+Result:
 """
             # Timeout/Crash 방지를 위한 파라미터 튜닝
             output = self.model(
                 prompt,
-                max_tokens=128, # 더 짧게 제한
-                stop=["<|im_end|>", "\n\n"], # double newline으로 빠른 종료 유도
-                temperature=0.1, 
+                max_tokens=128, 
+                stop=["<|im_end|>", "\n\n", "User:", "Task:", "Result:"], 
+                temperature=0.0, 
                 echo=False
             )
             content = output["choices"][0]["text"].strip()
             
-            # Robust Parsing: 줄바꿈으로 나누고 특수문자 제거 후 유효성 검사
+            # Robust Parsing
             lines = []
             for line in content.split('\n'):
                 # 숫자, 불렛, 하이픈 등 제거
                 clean_line = re.sub(r"^[\d\-\*\.]+\s*", "", line.strip()).strip()
-                if len(clean_line) > 1: # 최소 2글자 이상
+                if len(clean_line) > 1: 
                      lines.append(clean_line)
             
+            # [Aggressive Filter] If decomposition results in more lines, check if they are just synonyms
             if len(lines) > 1:
+                # If original query was short (< 5 words), decomposition is risky unless it has "and/,"
+                if len(user_input.split()) < 5 and not any(k in user_input for k in ["and", ",", "와", "과", "하고", "vs"]):
+                     logging.warning(f"[Brain] Decomposition rejected (Short query, no explicit separator): {lines}")
+                     return [user_input]
+                     
                 logging.info(f"[Brain] LLM Decomposition Success: {lines}")
                 return lines
             else:
-                logging.warning(f"[Brain] LLM Decomposition too short or empty: {content}")
+                 # [Improvement] If LLM failed to split (returned 1 line), 
+                 # BUT we detected complex keywords/separators, fall through to Regex/Heuristic below.
+                 # Do NOT return [user_input] immediately.
+                 logging.info("[Brain] LLM returned 1 line, trying fallback heuristic...")
+                 pass 
+
                 
         except Exception as e:
             logging.error(f"[Brain] LLM Decomposition failed: {e}")
@@ -403,17 +519,7 @@ Tokyo weather
             topic = "뉴스"
         
         # Regex로 분리 (와/과/랑/이랑/vs/and/,)
-        # \s*는 공백이 있을수도 없을수도 있음을 의미
-        # (?: ... )는 비캡처 그룹
-        # \s*는 공백이 있을수도 없을수도 있음을 의미
-        # (?: ... )는 비캡처 그룹
-        # ? 문자로도 분리 (질문이 여러 개인 경우)
-        # Regex로 분리 (와/과/랑/이랑/vs/and/,)
-        # Regex로 분리 (와/과/랑/이랑/vs/and/,)
         # [Fix] More inclusive pattern for connectors
-        # 1. 공백 + 연결어 + 공백 (기존)
-        # 2. 접미사 형태 (과/와/랑/이랑) + 공백 -> (?<=[가-힣])(과|와|랑|이랑)\s+
-        # 3. 콤마, 물음표
         split_pattern = r"(?<=[가-힣])(?:과|와|랑|이랑)\s+|\s+(?:vs|and|&|or|또는|그리고)\s+|\s*,\s*|\s*\?\s*"
         
         parts = re.split(split_pattern, user_input)

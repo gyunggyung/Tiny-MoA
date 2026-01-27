@@ -15,56 +15,91 @@ def get_weather(location: str, unit: str = "celsius", **kwargs) -> dict[str, Any
     날씨 정보 조회 (wttr.in API - 무료, API 키 불필요)
     """
     import requests
+    import time
     
     try:
         # wttr.in API 호출 (JSON 형식)
         # [Fix] "Seoul weather" 처럼 넘어오는 경우 "weather" 제거
         clean_loc = location.lower().replace("weather", "").replace("날씨", "").strip()
-        if not clean_loc: 
-            clean_loc = location # 다 지워졌으면 원본 사용
         
-        # [Fix] 한글 도시명 -> 영문 변환 (wttr.in 정확도 향상)
+        # [Fix] 만약 location이 문장형(공백 포함)이라면 도시명 추출 시도
+        # "How is the weather in Seoul?" -> "Seoul"
+        import re
+        # "in [City]" 패턴 시도
+        match = re.search(r"in\s+([a-zA-Z]+)", clean_loc)
+        if match:
+            clean_loc = match.group(1)
+            
+        # [Fix] 한글 도시명 -> 영문 변환 (wttr.in 정확도 향상) 및 문장 내 도시 검색
         city_map = {
             "서울": "Seoul", "도쿄": "Tokyo", "런던": "London", 
             "광주": "Gwangju", "부산": "Busan", "인천": "Incheon",
             "대구": "Daegu", "대전": "Daejeon", "파리": "Paris",
-            "뉴욕": "New York", "베이징": "Beijing"
+            "뉴욕": "New York", "베이징": "Beijing", "제주": "Jeju",
+            "청주": "Cheongju", "울산": "Ulsan", "수원": "Suwon"
         }
+        
+        # 문장 내에 city_map 키가 있는지 확인
+        found_city = False
         for k, v in city_map.items():
-            if k in clean_loc:
+            if k in location or k in clean_loc: # 한글 도시 Check
                 clean_loc = v
+                found_city = True
                 break
+            if v.lower() in clean_loc.lower(): # 영문 도시 Check
+                clean_loc = v
+                found_city = True
+                break
+        
+        if not found_city:
+            # Fallback: 공백으로 나누고 마지막 단어 (보통 "Seoul" 위치) 시도, 혹은 cleaning된 것 사용
+            if len(clean_loc.split()) > 1:
+                # "Check Seoul" -> "Seoul"
+                clean_loc = clean_loc.split()[-1]
 
-        url = f"https://wttr.in/{clean_loc}?format=j1"
-        response = requests.get(url, timeout=30, headers={"User-Agent": "curl/7.0"})
-        response.raise_for_status()
-        data = response.json()
-        
-        current = data["current_condition"][0]
-        
-        # 온도 단위 처리
-        if unit == "fahrenheit":
-            temp = current["temp_F"]
-            unit_symbol = "°F"
-        else:
-            temp = current["temp_C"]
-            unit_symbol = "°C"
-        
-        return {
-            "location": location,
-            "temperature": f"{temp}{unit_symbol}",
-            "condition": current["weatherDesc"][0]["value"],
-            "humidity": f"{current['humidity']}%",
-            "feels_like": f"{current['FeelsLikeC']}°C",
-            "wind": f"{current['windspeedKmph']} km/h",
-            "source": "wttr.in"
-        }
-    except requests.exceptions.Timeout:
-        return {"error": "API timeout - please try again"}
-    except requests.exceptions.RequestException as e:
-        return {"error": f"API request failed: {str(e)}"}
-    except (KeyError, IndexError) as e:
-        return {"error": f"Invalid API response: {str(e)}"}
+        if not clean_loc: 
+            clean_loc = location # 다 지워졌으면 원본 사용
+
+        # Retry Logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Use standard browser UA to avoid blocking
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+                }
+                url = f"https://wttr.in/{clean_loc}?format=j1"
+                response = requests.get(url, timeout=10, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                
+                current = data["current_condition"][0]
+                
+                # 온도 단위 처리
+                if unit == "fahrenheit":
+                    temp = current["temp_F"]
+                    unit_symbol = "°F"
+                else:
+                    temp = current["temp_C"]
+                    unit_symbol = "°C"
+                
+                return {
+                    "location": location,
+                    "temperature": f"{temp}{unit_symbol}",
+                    "condition": current["weatherDesc"][0]["value"],
+                    "humidity": f"{current['humidity']}%",
+                    "feels_like": f"{current['FeelsLikeC']}°C",
+                    "wind": f"{current['windspeedKmph']} km/h",
+                    "source": "wttr.in"
+                }
+            except requests.exceptions.RequestException as e:
+                if attempt == max_retries - 1:
+                    raise e
+                time.sleep(1) # Wait before retry
+                
+    except (requests.exceptions.RequestException, KeyError, IndexError, ValueError) as e:
+        # [Graceful Fail] If extraction failed and API failed, return helpful error
+        return {"error": f"Could not find weather for '{location}'. Try specifying a city name (e.g. 'Seoul'). Debug: {str(e)}"}
 
 
 def search_web(query: str, num_results: int = 5) -> dict[str, Any]:
