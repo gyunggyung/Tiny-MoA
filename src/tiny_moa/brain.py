@@ -8,8 +8,9 @@ Brain 모델 래퍼 (LiquidAI LFM2.5-1.2B)
 """
 
 import os
+import re
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from llama_cpp import Llama
 import sys
 import logging
@@ -27,10 +28,10 @@ LFM_INSTRUCT_PARAMS = {
 }
 
 LFM_THINKING_PARAMS = {
-    "temperature": 0.7,
-    "top_k": 40,
+    "temperature": 0.05,  # [Critical] Thinking models require very low temp
+    "top_k": 50,
     "top_p": 0.9,
-    "repeat_penalty": 1.1,
+    "repeat_penalty": 1.05,
 }
 
 # 라우터 시스템 프롬프트
@@ -106,8 +107,13 @@ class Brain:
             n_threads=n_threads,
             verbose=False,
         )
+        self.n_ctx = n_ctx
         
         # logger.info(f"[Brain] Loaded! (threads={n_threads}, ctx={n_ctx})") # Removed print to clean UI
+    
+    def get_prompt_prefix(self) -> str:
+        """Returns the prompt prefix (e.g. <|startoftext|>)"""
+        return "<|startoftext|>"
     
     def route(self, user_input: str) -> dict:
         """
@@ -162,8 +168,9 @@ class Brain:
         if hasattr(self.model, "reset"):
             self.model.reset()
         
-        # ChatML 포맷 수동 구성
-        prompt = f"""<|im_start|>system
+        # ChatML 포맷 수동 구성 (Official Template: <|startoftext|><|im_start|>system...)
+        prefix = "<|startoftext|>"
+        prompt = f"""{prefix}<|im_start|>system
 {ROUTER_SYSTEM_PROMPT}<|im_end|>
 <|im_start|>user
 {user_input}<|im_end|>
@@ -174,9 +181,10 @@ class Brain:
             prompt,
             max_tokens=256,
             stop=["<|im_end|>"],
-            temperature=0.7,
-            top_p=0.9,
-            repeat_penalty=1.1,
+            temperature=self.params["temperature"], # Use dynamic params
+            top_p=self.params["top_p"],
+            top_k=self.params["top_k"],
+            repeat_penalty=self.params["repeat_penalty"],
             echo=False
         )
         
@@ -220,8 +228,10 @@ class Brain:
             self.model.reset()
         
         # ChatML 포맷 수동 구성
-        sys_content = system_prompt or "You are a helpful assistant. Always respond in Korean unless asked otherwise."
-        prompt = f"""<|im_start|>system
+        # User requested specific default prompt: "You are a helpful assistant trained by Liquid AI."
+        sys_content = system_prompt or "You are a helpful assistant trained by Liquid AI. Always respond in Korean unless asked otherwise."
+        prefix = "<|startoftext|>"
+        prompt = f"""{prefix}<|im_start|>system
 {sys_content}<|im_end|>
 <|im_start|>user
 {user_input}<|im_end|>
@@ -231,11 +241,12 @@ class Brain:
         # 직접 llm() 호출 (create_chat_completion 대신)
         output = self.model(
             prompt,
-            max_tokens=512,
+            max_tokens=self.n_ctx - 512, # Max context usage
             stop=["<|im_end|>"],
-            temperature=0.7,
-            top_p=0.9,
-            repeat_penalty=1.1,
+            temperature=self.params["temperature"],
+            top_p=self.params["top_p"],
+            top_k=self.params["top_k"],
+            repeat_penalty=self.params["repeat_penalty"],
             echo=False
         )
         
@@ -260,86 +271,125 @@ class Brain:
         except:
             pass
 
-        system_prompt = """You are a Professional Data Integration Assistant.
-Your goal is to synthesize multiple task results into a single, comprehensive Korean report.
+        # [English-First Strategy]
+        # 품질과 속도를 위해 먼저 영어로 생성하고, 나중에 번역기가 한국어로 변환합니다.
+        # "Reasoning" 오버헤드를 줄이기 위해 단순하고 명확한 영어 지시를 사용합니다.
+        system_prompt = """Based on the gathered data, provide a **concise weather report**.
 
-YOUR JOB:
-1. READ ALL the facts below. 
-2. DO NOT skip any data point. If multiple items (e.g. news articles) are listed, YOU MUST report on all of them.
-3. [CRITICAL] YOU MUST INCLUDE THE ACTUAL URLs/LINKS in the report. DO NOT USE PLACEHOLDERS like [link]. COPY THE URL from the facts below.
-4. If a tool failed or data is missing for some items, explicitly state that.
-5. ALWAYS write the final response in KOREAN (한국어).
+[Rules]
+1. Output in **English** (will be translated later).
+2. Use the format: "City: Condition, Temperature"
+3. Keep the numeric values exactly as they are.
+4. Do not include any introductory or concluding remarks. Just the list.
+5. **Report for ALL items found in the data. Do NOT skip any city.**
 
-FACTS:
+[Example]
+Seoul: Sunny, -7°C
+Tokyo: Cloudy, 5°C
+London: rain, 6°C
 """ + formatted_output
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"User Question: {user_input}\n\nPlease write the answer response:"},
+            {"role": "user", "content": "위 데이터를 한국어로 변환하여 출력해:"},
         ]
         
         # [Stability Fix] 컨텍스트 초기화
-        # 통합 단계는 독립적이므로 이전 대화 맥락이 필요 없음 (Facts에 다 있음)
         if hasattr(self.model, "reset"):
             self.model.reset()
         
         # Temperature 0.1로 창의성 억제
         params = self.params.copy()
-        params["temperature"] = 0.1
         
         try:
             response = self.model.create_chat_completion(
-            messages=messages,
-            max_tokens=512,
-            **params,
-        )
-        
-            return response["choices"][0]["message"]["content"]
+                messages=messages,
+                max_tokens=params.get("max_tokens", 4096), # Increase token limit further
+                **params,
+            )
+            
+            return self._clean_response(response["choices"][0]["message"]["content"])
         except Exception as e:
             return f"Error integrating response: {e}"
     
-    def decompose_query(self, user_input: str) -> list[str]:
+    def _clean_response(self, text: str) -> str:
         """
-        복합 질문을 단순 질문 리스트로 분해
-        예: "서울과 도쿄 날씨 비교해줘" -> ["서울 날씨 어때?", "도쿄 날씨 어때?", "두 날씨 비교해줘"]
+        Thinking 모델의 <think>...</think> 태그를 제거하고 실제 응답만 추출합니다.
+        태그가 닫히지 않은 경우(토큰 부족 등)에도 생각 부분을 최대한 제거합니다.
         """
-        system_prompt = """You are a query decomposer.
-Your task is to split a complex question into simple sub-questions.
-
-OUTPUT FORMAT:
-Provide a pure list of queries, one per line. Start each line with a hyphen "- ".
-NO markdown, NO explanations.
-
-EXAMPLES:
-Input: "Compare Seoul and Tokyo weather"
-Output:
-- Get weather in Seoul
-- Get weather in Tokyo
-
-Input: "Check python and uv versions"
-Output:
-- check python version
-- check uv version
-"""
-        # [Stability Fix] LFM 1.2B 모델이 JSON/List 생성 시 'llama_decode returned -1' 크래시가 잦음
-        # 따라서 LLM 호출을 건너뛰고 바로 휴리스틱 분해를 시도함
-        # 필요한 경우에만 LLM을 켜도록 플래그 처리 가능하나, 현재 환경에서는 안정성 최우선.
-        pass
+        import re
         
+        # 1. <think>... </think> 완벽한 태그 제거
+        cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        
+        # 2. 닫는 태그가 잘린 경우 (<think>만 있고 </think>가 없음)
+        if "<think>" in cleaned:
+            # <think> 이후의 모든 내용을 생각 과정으로 간주하고 제거 (생각만 하다가 끝난 경우, 답변 없음)
+            # 답변이 아예 없는 경우가 되므로, 에러 메시지 반환
+            return "⚠️ 답변 생성 중 토큰 부족으로 중단되었습니다. (Thinking process truncated)"
+            
+        return cleaned
+
+    def decompose_query(self, user_input: str) -> List[str]:
         """
-        content = ""
+        사용자의 복잡한 질문을 여러 개의 간단한 Tool 검색 쿼리로 분해합니다.
+        LLM을 우선 사용하고, 실패 시 정규식/휴리스틱으로 fallback합니다.
+        """
+        import logging
+        from typing import List, Optional
+        import re # Ensure re is imported if not already
+
         try:
-            # (LLM Call skipped to prevent crash)
+            # LLM Prompt for Decomposition
+            prompt = f"""<|startoftext|>
+Task: Split the following query into a list of independent sub-tasks.
+Query: "{user_input}"
+
+Rules:
+1. One task per line.
+2. NO bullets, NO numbers, NO explanations.
+3. Keep it simple.
+4. If the query asks for comparison, split by entity.
+5. Example: "Seoul and Tokyo weather" ->
+Seoul weather
+Tokyo weather
+
+{user_input}<|im_end|>
+<|im_start|>assistant
+"""
+            # Timeout/Crash 방지를 위한 파라미터 튜닝
+            output = self.model(
+                prompt,
+                max_tokens=128, # 더 짧게 제한
+                stop=["<|im_end|>", "\n\n"], # double newline으로 빠른 종료 유도
+                temperature=0.1, 
+                echo=False
+            )
+            content = output["choices"][0]["text"].strip()
+            
+            # Robust Parsing: 줄바꿈으로 나누고 특수문자 제거 후 유효성 검사
+            lines = []
+            for line in content.split('\n'):
+                # 숫자, 불렛, 하이픈 등 제거
+                clean_line = re.sub(r"^[\d\-\*\.]+\s*", "", line.strip()).strip()
+                if len(clean_line) > 1: # 최소 2글자 이상
+                     lines.append(clean_line)
+            
+            if len(lines) > 1:
+                logging.info(f"[Brain] LLM Decomposition Success: {lines}")
+                return lines
+            else:
+                logging.warning(f"[Brain] LLM Decomposition too short or empty: {content}")
+                
+        except Exception as e:
+            logging.error(f"[Brain] LLM Decomposition failed: {e}")
             pass
-        except:
-             pass
-        """
             
         # [Fallback] 휴리스틱/Regex 분해 (LLM 실패 시)
         # "서울과 도쿄" -> ["서울", "도쿄"] -> ["서울 날씨", "도쿄 날씨"] (날씨가 포함된 경우)
         import re
         topic = ""
-        if any(k in user_input for k in ["날씨", "weather"]):
+        if any(k in user_input for k in ["날씨", "weather", "기온", "온도"]):
             topic = "날씨"
         elif any(k in user_input for k in ["뉴스", "news", "기사", "article", "소식"]):
             topic = "뉴스"
@@ -347,18 +397,65 @@ Output:
         # Regex로 분리 (와/과/랑/이랑/vs/and/,)
         # \s*는 공백이 있을수도 없을수도 있음을 의미
         # (?: ... )는 비캡처 그룹
-        # Regex로 분리 (와/과/랑/이랑/vs/and/,)
         # \s*는 공백이 있을수도 없을수도 있음을 의미
         # (?: ... )는 비캡처 그룹
         # ? 문자로도 분리 (질문이 여러 개인 경우)
         # Regex로 분리 (와/과/랑/이랑/vs/and/,)
+        # Regex로 분리 (와/과/랑/이랑/vs/and/,)
         # [Fix] More inclusive pattern for connectors
-        split_pattern = r"\s+(?:vs|and|&|or|또는|그리고|와|과|랑|이랑)\s+|\s*,\s*|\s*\?\s*"
+        # 1. 공백 + 연결어 + 공백 (기존)
+        # 2. 접미사 형태 (과/와/랑/이랑) + 공백 -> (?<=[가-힣])(과|와|랑|이랑)\s+
+        # 3. 콤마, 물음표
+        split_pattern = r"(?<=[가-힣])(?:과|와|랑|이랑)\s+|\s+(?:vs|and|&|or|또는|그리고)\s+|\s*,\s*|\s*\?\s*"
         
         parts = re.split(split_pattern, user_input)
         
-        # 정제 및 유효성 검사
-        parts = [p.strip() for p in parts if len(p.strip()) > 1]
+        # [Fallback Enhancement] "광주 춘천 날씨" -> ["광주", "춘천", "날씨"] -> ["광주 날씨", "춘천 날씨"]
+        # LLM 실패 시, 단순 공백으로도 분리 시도
+        final_parts = []
+        for part in parts:
+            part = part.strip()
+            if not part: continue
+            
+            # 1. 이미 완성된 문장이면 패스
+            if len(part.split()) > 3: 
+                final_parts.append(part)
+                continue
+                
+            # 2. 공백으로 나눴을 때 2개 이상이고, "날씨" 같은 키워드가 포함된 경우
+            sub_parts = part.split()
+            if len(sub_parts) >= 2 and any(k in part for k in ["날씨", "weather", "기온"]):
+                # 마지막 단어가 공통 키워드일 확률 높음 (예: "서울 대전 날씨")
+                keyword = sub_parts[-1]
+                # "날씨를", "날씨는" 등 조사가 붙어도 처리가능하도록 수정
+                if any(x in keyword for x in ["날씨", "weather", "기온", "온도"]):
+                    for sub in sub_parts[:-1]:
+                        final_parts.append(f"{sub} {keyword}")
+                else:
+                    # 키워드가 명확지 않으면 그냥 다 넣음
+                    final_parts.extend(sub_parts)
+            else:
+                 final_parts.append(part)
+
+        parts = final_parts
+        
+        # [Filtering] 불용어 및 무의미한 조각 제거
+        filtered_parts = []
+        for p in parts:
+            p_clean = p.strip()
+            # 1. 너무 짧거나 특수문자만 있는 경우 제외
+            if len(p_clean) < 2: 
+                continue
+            # 2. "날씨를", "비교해줘" 등 불용어만 있는 청크 제외
+            if p_clean in ["날씨를", "날씨", "비교", "비교해줘", "알려줘", "그리고", "소개해줘", "검색해줘"]:
+                continue
+            # 3. 조사가 붙은 단독 키워드 처리 (예: "날씨는")
+            if p_clean.endswith(("날씨를", "날씨는", "날씨가")):
+                continue
+                
+            filtered_parts.append(p_clean)
+            
+        parts = filtered_parts # Update parts with filtered list
         
         if len(parts) > 1:
             # 정제된 쿼리 생성

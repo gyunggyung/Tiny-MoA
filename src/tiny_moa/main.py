@@ -49,10 +49,24 @@ def main():
     )
 
     parser.add_argument(
+        "--show-thinking",
+        action="store_true",
+        default=False,
+        help="Thinking Process 출력 여부 (Thinking 모델 사용 시)",
+    )
+
+    parser.add_argument(
         "--tui",
         action="store_true",
         default=False,
         help="Tiny Cowork TUI 모드 실행",
+    )
+
+    parser.add_argument(
+        "--n-ctx",
+        type=int,
+        default=4096,
+        help="Context Window Size (default: 4096)",
     )
     
     args = parser.parse_args()
@@ -63,7 +77,11 @@ def main():
         if not args.tui:
             print("🌐 Translation Pipeline 활성화")
             print("🤖 Tiny MoA 초기화 중...")
-        moa = TinyMoA(use_thinking=args.thinking)
+        moa = TinyMoA(
+            use_thinking=args.thinking, 
+            show_thinking=args.show_thinking,
+            n_ctx=args.n_ctx
+        )
         
         if args.tui:
             result = moa.run_cowork_flow(args.query)
@@ -72,10 +90,13 @@ def main():
         else:
             moa.chat(args.query)
     else:
-        # 기본 테스트
         console.print("[bold]🧪 Tiny MoA 기본 테스트[/bold]\n")
         
-        moa = TinyMoA(use_thinking=args.thinking)
+        moa = TinyMoA(
+            use_thinking=args.thinking, 
+            show_thinking=args.show_thinking,
+            n_ctx=args.n_ctx
+        )
         
         test_queries = [
             "안녕하세요! 반갑습니다.",

@@ -45,6 +45,7 @@ class TinyMoA:
         tool_caller_path: Optional[str] = None,
         n_ctx: int = 4096,
         use_thinking: bool = False,
+        show_thinking: bool = False,
         lazy_load: bool = True,
         enable_tools: bool = True,
         enable_translation: bool = True,
@@ -64,6 +65,7 @@ class TinyMoA:
         self.tool_caller_path = tool_caller_path
         self.n_ctx = n_ctx
         self.use_thinking = use_thinking
+        self.show_thinking = show_thinking
         self.lazy_load = lazy_load
         self.enable_tools = enable_tools
         self.enable_translation = enable_translation and TRANSLATION_AVAILABLE
@@ -666,13 +668,20 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                     final_response = self._translation_pipeline.from_english(final_response, translation_ctx)
                 except Exception as e:
                     logger.error(f"Translation failed (main): {e}")
-        
         if verbose:
             console.print(Panel(
                 Markdown(str(final_response)) if isinstance(final_response, str) else JSON.from_data(final_response),
                 title="[bold green]💬 응답[/bold green]",
                 border_style="green",
             ))
+            
+            # [Thinking Model Visualization]
+            # 만약 Thinking Trace가 포함된 경우 (예: <thinking>...</thinking> 또는 유사 패턴)
+            # 별도로 파싱하여 보여주는 로직 추가
+            if self.use_thinking and self.show_thinking and isinstance(final_response, str):
+                 # Thinking Trace가 있는지 확인하고 있으면 별도 패널로 출력
+                 # (현재 모델은 명시적인 태그가 없을 수 있으므로, 일단 전체 출력 유지하되 안내 메시지 추가)
+                 console.print("[dim blue]🧠 Thinking Process Visualization Enabled (Raw Output)[/dim blue]")
         
         return final_response
 
@@ -888,15 +897,35 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                 if t.status == TaskStatus.COMPLETED:
                      results.append(f"[TASK: {t.description}]\nDATA: {t.result}")
 
-            # 3. Final Critic (NEW)
+            # 3. Final Integration (Synthesis)
             if use_tui: 
-                dashboard.add_log("Performing quality check...", "Critic")
+                dashboard.add_log("Synthesizing final report...", "Brain")
                 live.update(dashboard.generate_layout())
             
-            logger.info("Performing final quality check...")
-            with self._model_lock:
-                final_report = self.brain.integrate_response(user_goal, "\n\n".join(results))
+            logger.info("Performing final integration...")
+            input_data = "\n\n".join(results)
+            logger.info(f"Input data to Brain: {input_data[:500]}...") # Log first 500 chars to check
             
+            with self._model_lock:
+                final_report = self.brain.integrate_response(user_goal, input_data)
+            
+            logger.info(f"Pre-translation output: {final_report}")
+
+            # [English-First Strategy]
+            # Brain은 영어를 생성하므로, 만약 사용자 질문이 한국어였다면(또는 번역 파이프라인이 있다면) 한국어로 번역
+            if self.enable_translation and self._translation_pipeline and isinstance(final_report, str):
+                if use_tui:
+                     dashboard.add_log("Translating report to Korean...", "System")
+                     live.update(dashboard.generate_layout())
+                
+                # 타겟 언어 감지를 위해 user_goal 재분석 (cowork flow는 chat과 별개라 직접 수행)
+                t_ctx = self._translation_pipeline.to_english(user_goal)
+                if t_ctx.is_translated: # user_goal이 영어가 아니었다면 (즉 한국어 등)
+                     try:
+                         final_report = self._translation_pipeline.from_english(final_report, t_ctx)
+                     except Exception as e:
+                         logger.error(f"Translation failed (cowork): {e}")
+
             if use_tui: 
                 dashboard.add_log("Flow completed successfully.", "System")
                 live.stop()

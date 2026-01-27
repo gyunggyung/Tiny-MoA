@@ -18,7 +18,24 @@ def get_weather(location: str, unit: str = "celsius", **kwargs) -> dict[str, Any
     
     try:
         # wttr.in API 호출 (JSON 형식)
-        url = f"https://wttr.in/{location}?format=j1"
+        # [Fix] "Seoul weather" 처럼 넘어오는 경우 "weather" 제거
+        clean_loc = location.lower().replace("weather", "").replace("날씨", "").strip()
+        if not clean_loc: 
+            clean_loc = location # 다 지워졌으면 원본 사용
+        
+        # [Fix] 한글 도시명 -> 영문 변환 (wttr.in 정확도 향상)
+        city_map = {
+            "서울": "Seoul", "도쿄": "Tokyo", "런던": "London", 
+            "광주": "Gwangju", "부산": "Busan", "인천": "Incheon",
+            "대구": "Daegu", "대전": "Daejeon", "파리": "Paris",
+            "뉴욕": "New York", "베이징": "Beijing"
+        }
+        for k, v in city_map.items():
+            if k in clean_loc:
+                clean_loc = v
+                break
+
+        url = f"https://wttr.in/{clean_loc}?format=j1"
         response = requests.get(url, timeout=30, headers={"User-Agent": "curl/7.0"})
         response.raise_for_status()
         data = response.json()
