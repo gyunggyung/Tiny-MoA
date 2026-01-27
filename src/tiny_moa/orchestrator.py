@@ -445,6 +445,66 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         
         return {"error": "Could not infer tool from keywords"}
     
+    def _process_rag_attachments(self, user_input: str, verbose: bool = True) -> tuple[str, str]:
+        """
+        @[filename] 패턴을 찾아 RAG 처리하고 컨텍스트 반환
+        
+        Returns:
+            (cleaned_user_input, rag_context)
+        """
+        rag_context = ""
+        rag_files = re.findall(r"@\[(.*?)\]", user_input)
+        
+        if not rag_files:
+            return user_input, ""
+            
+        if verbose:
+            console.print(f"[dim]📚 RAG 파일 감지: {rag_files}[/dim]")
+        
+        # Lazy Loading check
+        if not hasattr(self, "_rag_engine") or self._rag_engine is None:
+            try:
+                from src.rag.engine import RAGEngine
+                self._rag_engine = RAGEngine()
+            except ImportError as e:
+                    console.print(f"[red]⚠️ RAG Engine 로드 실패: {e}[/red]")
+                    self._rag_engine = None
+
+        if self._rag_engine:
+            for file_ref in rag_files:
+                # 파일 경로 보정 (현재 디렉토리 기준)
+                file_path = file_ref.strip()
+                if not Path(file_path).exists():
+                        # 혹시 절대 경로가 아니라면 현재 작업 디렉토리에서 찾기
+                        file_path = str(Path(project_root) / file_ref.strip())
+                
+                if Path(file_path).exists():
+                    # 1. Ingest (이미 처리된 경우 스킵됨 - Engine 내부 로직)
+                    if verbose:
+                            console.print(f"[dim]🔄 문서 처리 중: {Path(file_path).name}...[/dim]")
+                    status = self._rag_engine.ingest_file(file_path)
+                    if verbose:
+                            console.print(f"[dim]   Result: {status}[/dim]")
+                    
+                    # 2. Query (질문과 관련된 내용 검색)
+                    # 질문에서 파일 참조 제거 후 검색
+                    clean_query = re.sub(r"@\[(.*?)\]", "", user_input).strip()
+                    retrieved = self._rag_engine.query(clean_query)
+                    
+                    if retrieved:
+                            rag_context += f"\n\n[Context from {file_ref}]\n{retrieved}\n"
+                else:
+                    if verbose:
+                            console.print(f"[yellow]⚠️ 파일을 찾을 수 없음: {file_ref}[/yellow]")
+        
+        # 입력에서 파일 참조 제거
+        clean_input = re.sub(r"@\[(.*?)\]", "", user_input).strip()
+        
+        if rag_context and verbose:
+            console.print(f"[dim]📄 RAG 컨텍스트 추가됨 ({len(rag_context)} chars)[/dim]")
+            
+        return clean_input, rag_context
+
     def chat(self, user_input: str, rag_context: str = "", verbose: bool = True, return_raw_tool_result: bool = False) -> str:
         """
         사용자 질문에 응답 (Thinking -> Tool Calling -> RAG -> Brain 순위)
@@ -466,59 +526,9 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
             console.print(f"\n[bold]📝 입력:[/bold] {user_input}")
 
         # 0.1. [RAG] 파일 참조 감지 (@[filename])
-        # 패턴: @[filename] (공백 포함 가능)
-        rag_context = ""
-        rag_files = re.findall(r"@\[(.*?)\]", user_input)
-        
-        if rag_files:
-            if verbose:
-                console.print(f"[dim]📚 RAG 파일 감지: {rag_files}[/dim]")
-            
-            # Lazy Loading check
-            if not hasattr(self, "_rag_engine") or self._rag_engine is None:
-                try:
-                    from src.rag.engine import RAGEngine
-                    self._rag_engine = RAGEngine()
-                except ImportError as e:
-                     console.print(f"[red]⚠️ RAG Engine 로드 실패: {e}[/red]")
-                     self._rag_engine = None
-
-            if self._rag_engine:
-                for file_ref in rag_files:
-                    # 파일 경로 보정 (현재 디렉토리 기준)
-                    file_path = file_ref.strip()
-                    if not Path(file_path).exists():
-                         # 혹시 절대 경로가 아니라면 현재 작업 디렉토리에서 찾기
-                         file_path = str(Path(project_root) / file_ref.strip())
-                    
-                    if Path(file_path).exists():
-                        # 1. Ingest (이미 처리된 경우 스킵됨 - Engine 내부 로직)
-                        if verbose:
-                             console.print(f"[dim]🔄 문서 처리 중: {Path(file_path).name}...[/dim]")
-                        status = self._rag_engine.ingest_file(file_path)
-                        if verbose:
-                             console.print(f"[dim]   Result: {status}[/dim]")
-                        
-                        # 2. Query (질문과 관련된 내용 검색)
-                        # 질문에서 파일 참조 제거 후 검색
-                        clean_query = re.sub(r"@\[(.*?)\]", "", user_input).strip()
-                        retrieved = self._rag_engine.query(clean_query)
-                        
-                        if retrieved:
-                             rag_context += f"\n\n[Context from {file_ref}]\n{retrieved}\n"
-                    else:
-                        if verbose:
-                             console.print(f"[yellow]⚠️ 파일을 찾을 수 없음: {file_ref}[/yellow]")
-            
-            if rag_context:
-                if verbose:
-                     console.print(f"[dim]📄 RAG 컨텍스트 추가됨 ({len(rag_context)} chars)[/dim]")
-                # [Fix] 사용자 입력에서 @[...] 패턴 제거하여 Brain이 검색어로 오인하지 않게 함
-                user_input = re.sub(r"@\[(.*?)\]", "", user_input).strip()
-                
-                # 사용자 입력에 컨텍스트 주입 (Brain이 읽도록)
-                # 원본 질문은 유지하되, 컨텍스트를 뒤에 붙임
-                user_input += f"\n\n--- Reference Material ---\n{rag_context}\n--------------------------\n(Answer strictly based on the Reference Material above if relevant.)"
+        user_input, rag_context = self._process_rag_attachments(user_input, verbose=verbose)
+        if rag_context:
+             user_input += f"\n\n--- Reference Material ---\n{rag_context}\n--------------------------\n(Answer strictly based on the Reference Material above if relevant.)"
         
         # 0.5. [Multi-Step] 복합 질문 분해 (Decomposition)
         # "비교", "compare", "vs" 등 키워드가 있으면 분해 시도
@@ -743,7 +753,20 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         file_skill = CoworkFileSkill(workspace)
         dashboard = CoworkDashboard(user_goal)
         self.dashboard = dashboard
+
         runner = ParallelRunner(max_workers=4)
+
+        # 0. Pre-process RAG attachments
+        # [Fix] Handle @[filename] in Cowork mode
+        user_goal, rag_context = self._process_rag_attachments(user_goal, verbose=use_tui)
+        if rag_context:
+             logger.info(f"RAG Context extracted ({len(rag_context)} chars)")
+             if use_tui:
+                 dashboard.add_log(f"RAG Context attached from files.", "System")
+
+
+
+
 
         # Worker initialization
         researcher = ResearchWorker("Research-1", logger, self)
@@ -759,6 +782,13 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         # Determine if it's a simple text/file summary request (Heuristic Fast track)
         is_simple_summary = any(kw in user_goal.lower() for kw in ["요약", "정리", "summarize", "read", "읽고"]) and len(user_goal) < 50
         
+        # [Fix] If RAG context is present, FORCE fast-track summary mode (Direct)
+        if rag_context:
+            logger.info("RAG context detected. Forcing DIRECT/Summary mode.")
+            route = "DIRECT"
+            is_simple_summary = True
+
+        
         # Decisions
         bypass_llm_planner = (route in ["TOOL", "DIRECT"]) or is_simple_summary
         
@@ -773,6 +803,11 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         try:
             # 1. Plan
             context_str = workspace.get_context_description()
+            if rag_context:
+                context_str += f"\n\n=== Attached File Context ===\n{rag_context}\n============================="
+
+
+
             if use_tui: 
                 dashboard.add_log("Analyzing request and creating plan...", "Planner")
                 live.update(dashboard.generate_layout())
@@ -792,11 +827,19 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
             elif is_simple_summary:
                 # Heuristic Planning for summary
                 logger.info("Using fast-track heuristic plan for summary.")
-                tasks_data = [
-                    {"description": f"Locate and read target files related to '{user_goal}'", "agent": "rag"},
-                    {"description": "Summarize the extracted content in Korean", "agent": "brain"},
-                    {"description": "Save the final summary", "agent": "writer"}
-                ]
+                
+                if rag_context:
+                     # If we already have context, we don't need a separate RAG step
+                     tasks_data = [
+                        {"description": f"Analyze the provided file context and answer the user's question: '{user_goal}'", "agent": "brain"},
+                        {"description": "Format the answer clearly", "agent": "writer"}
+                     ]
+                else:
+                    tasks_data = [
+                        {"description": f"Locate and read target files related to '{user_goal}'", "agent": "rag"},
+                        {"description": "Summarize the extracted content in Korean", "agent": "brain"},
+                        {"description": "Save the final summary", "agent": "writer"}
+                    ]
             else:
                 logger.info("Creating full LLM plan...")
                 tasks_data = planner.create_plan(user_goal, context_str)
@@ -814,6 +857,11 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
 
             # 2. Execute
             results = []
+            
+            # [Fix] Inject RAG context into history so workers can see it
+            if rag_context:
+                results.append(f"[CONTEXT FROM UPLOADED FILES]\n{rag_context}\n[END OF CONTEXT]")
+            
             
             # Use ParallelRunner if possible (experimental)
             # Find independent tasks (those with same agent or no clear dependency)

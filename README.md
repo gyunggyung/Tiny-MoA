@@ -90,10 +90,10 @@ uv run python -m tiny_moa.main --interactive
 uv run python -m tiny_moa.main --thinking --tui --n-ctx 12288 --query "..."
 
 # 4. 파일 참조 (RAG)
-uv run python -m tiny_moa.main --thinking --tui --query "@[1706.03762v7-split.pdf] 이 논문의 주요 아이디어가 뭐야?"
+uv run python -m tiny_moa.main --tui --query "@[1706.03762v7-split.pdf] 이 논문의 주요 아이디어가 뭐야?"
 
 # 5. 웹 검색 (뉴스/정보)
-uv run python -m tiny_moa.main --thinking --tui --query "최신 AI 뉴스 찾아줘"
+uv run python -m tiny_moa.main --tui --query "최신 AI 뉴스 찾아줘"
 
 ```
 
@@ -180,31 +180,34 @@ python -m tiny_moa.main --query "서울 날씨 어때?"
 ```
 Tiny-MoA/
 ├── pyproject.toml          # uv 프로젝트 설정
-├── uv.lock                 # 의존성 잠금 파일
-├── requirements.txt        # pip 호환
+├── uv.lock
+├── requirements.txt
 ├── README.md
 ├── README_EN.md
-├── docs/
-│   ├── implementation_plan.md
-│   ├── tool_calling_plan.md
-│   └── translation_multiagent_plan.md
-├── models/                 # GGUF 모델 (gitignore)
-│   ├── brain/
-│   └── reasoner/
+├── LICENSE
+├── docs/                   # 문서 및 계획 (Plans, Roadmaps)
+├── models/                 # GGUF 모델 (Brain, Reasoner)
+├── rag_storage/            # RAG 벡터 DB (ChromaDB)
 └── src/
-    ├── tiny_moa/           # 메인 모듈
-    │   ├── brain.py        # Brain 모델 래퍼
-    │   ├── reasoner.py     # Reasoner 모델 래퍼
-    │   ├── orchestrator.py # 오케스트레이터
-    │   └── main.py         # 진입점
-    ├── tools/              # Tool Calling
-    │   ├── schema.py       # Tool 스키마
-    │   ├── executor.py     # Tool 실행기
-    │   └── caller.py       # Tool Caller
-    └── translation/        # 번역 모듈
-        ├── detector.py     # 언어 감지
-        ├── translator.py   # Google 번역
-        └── pipeline.py     # 번역 파이프라인
+    ├── doc_processing/     # 문서 변환 (Docling)
+    │   └── converter.py
+    ├── rag/                # RAG 엔진
+    │   ├── engine.py       # RAG 로직
+    │   └── store.py        # 벡터 저장소
+    ├── tiny_moa/           # 메인 패키지
+    │   ├── cowork/         # Tiny Cowork (Agentic Workflow)
+    │   │   ├── workers/    # Specialized Workers (Brain, Tool, etc.)
+    │   │   ├── planner.py  # 작업 계획
+    │   │   └── workspace.py# 파일 시스템 접근
+    │   ├── ui/             # TUI (Rich)
+    │   ├── brain.py        # Thinking Model Wrapper
+    │   ├── reasoner.py     # Falcon Wrapper
+    │   ├── orchestrator.py # Central Controller
+    │   └── main.py         # Entry Point
+    ├── tools/              # Tool Use
+    │   ├── executor.py     # 도구 실행 (Search, Weather, etc.)
+    │   └── schema.py       # 도구 정의
+    └── translation/        # 번역 파이프라인
 ```
 
 ---
@@ -216,7 +219,7 @@ Tiny-MoA/
 - [x] **Phase 2:** Tool Calling (날씨, 검색, 계산, 시간)
 - [x] **Phase 3:** 번역 파이프라인 (English-First Strategy 적용)
 - [x] **Phase 4:** TUI 및 Thinking Model 통합 (v2.1)
-- [ ] **Phase 5:** Docling 문서 변환
+- [x] **Phase 5:** Docling 문서 변환
 - [ ] **Phase 5:** [Agent Ecosystem](docs/agent_ecosystem_vision.md) 구축
 - [ ] **Phase 6:** [All-in-One GUI App](docs/tiny_cowork_app_vision.md) 개발
 - [ ] **Phase 7:** [Master Roadmap](docs/v2_1_master_roadmap.md) 달성

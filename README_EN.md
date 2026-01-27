@@ -2,7 +2,7 @@
 
 # 🤖 Tiny MoA v2.1 (Unified Agentic System)
 
-> **"AI Legion for the GPU Poor"** - 1.2B Thinking Model autonomously plans and executes complex tasks! ✨
+> **"AI Legion for the GPU Poor"** - A 1.2B Thinking Model self-plans and orchestrates a 600M Reasoner + 90M Tool Caller to solve complex tasks. ✨
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://python.org)
@@ -13,11 +13,11 @@
 
 ## ✨ Key Features
 
-- 🧠 **Multi-Agent & Thinking**: LFM2.5-1.2B-Thinking (Brain) plans, collaborating with Reasoner (600M) & Tool Caller (90M).
-- 🖥️ **Interactive TUI**: Rich-based real-time task dashboard visualizing collaboration process.
-- 🔧 **Advanced Tooling**: Weather, Search (DuckDuckGo), File RAG, System Control.
-- 🌐 **English-First Strategy**: Reason in English, Translate to Local Language for speed & accuracy.
-- ⚡ **GPU-Free**: Runs smoothly on 16GB RAM CPU.
+- 🧠 **Multi-Agent & Thinking**: LFM2.5-1.2B-Thinking (Brain) creates plans, collaborating with Reasoner (600M) and Tool Caller (90M).
+- 🖥️ **Interactive TUI**: Rich-based real-time task board visualizing inter-agent collaboration.
+- 🔧 **Advanced Tooling**: Weather, Search (DuckDuckGo), File RAG, System Control, and more.
+- 🌐 **English-First Strategy**: Reasons in English and translates to the user's language for speed and accuracy.
+- ⚡ **GPU-Free**: Runs smoothly on 16GB RAM CPU environments.
 
 ---
 
@@ -25,7 +25,7 @@
 
 - [Quick Start](#-quick-start)
 - [How to Run](#-how-to-run)
-- [Model Configuration](#-model-configuration)
+- [Model Composition](#-model-composition)
 - [Architecture](#-architecture)
 - [Project Structure](#-project-structure)
 - [Roadmap](#-roadmap)
@@ -54,7 +54,7 @@ uv --version
 ### 3. Install Dependencies
 
 ```bash
-# Using uv (recommended - fast!)
+# Setup check with uv (Recommended - Fast!)
 uv sync
 
 # Or using pip
@@ -80,23 +80,24 @@ huggingface-cli download tiiuae/Falcon-H1-Tiny-R-0.6B-GGUF \
 ### Using uv (Recommended)
 
 ```bash
-# 1. Basic Run (TUI + Thinking)
-uv run python -m tiny_moa.main --thinking --show-thinking --tui --query "Compare weather in Seoul and Tokyo"
+# 1. Basic Run (TUI Mode + Thinking)
+uv run python -m tiny_moa.main --thinking --show-thinking --tui --query "Compare the weather in Seoul and Tokyo"
 
 # 2. Interactive Mode
 uv run python -m tiny_moa.main --interactive
 
-# 3. Long Context (Complex Reports)
+# 3. Long Context Parsing (For complex reports)
 uv run python -m tiny_moa.main --thinking --tui --n-ctx 12288 --query "..."
 
 # 4. File Reference (RAG)
-uv run python -m tiny_moa.main --thinking --tui --query "@[1706.03762v7-split.pdf] What is the main idea of this paper?"
+uv run python -m tiny_moa.main --tui --query "@[1706.03762v7-split.pdf] What is the main idea of this paper?"
 
 # 5. Web Search (News/Info)
-uv run python -m tiny_moa.main --thinking --tui --query "Find the latest AI news"
+uv run python -m tiny_moa.main --tui --query "Find the latest AI news"
+
 ```
 
-### Using pip environment
+### Using pip
 
 ```bash
 # PYTHONPATH setup required
@@ -104,27 +105,28 @@ $env:PYTHONPATH = "src"
 python -m tiny_moa.main --query "How is the weather in Seoul?"
 ```
 
-### Example Output
+### Execution Example
 
 ```
 📝 Input: How is the weather in Seoul?
 🌐 Translation: ko → en
 🧠 Routing: TOOL
-🔧 get_weather executed
-╭──────── 🔧 get_weather result ────────╮
-│ temperature: -2°C                      │
-│ condition: Light snow                  │
-│ humidity: 63%                          │
-╰────────────────────────────────────────╯
-💬 Response: Seoul weather is -2°C with light snow.
+🔧 Executing get_weather
+╭──────── 🔧 get_weather Result ───────╮
+│ temperature: -2°C                    │
+│ condition: Light snow                │
+│ humidity: 63%                        │
+╰──────────────────────────────────────╯
+🌐 Translation: en → ko
+💬 Response: The weather in Seoul is -2°C with light snow.
 ```
 
 ---
 
-## 🧩 Model Configuration
+## 🧩 Model Composition
 
 | Role | Model | Parameters | Memory |
-|------|-------|------------|--------|
+|------|------|----------|--------|
 | 🧠 **Brain** | LFM2.5-1.2B-Thinking | 1.17B | ~0.8GB |
 | 🤔 **Reasoner** | Falcon-H1-Tiny-R-0.6B | 600M | ~0.4GB |
 | 🔧 **Tool Caller** | Falcon-Tool-Calling-90M | 90M | ~0.1GB |
@@ -141,14 +143,14 @@ User Input (Multilingual)
        ▼
 ┌─────────────────────────────────────────┐
 │      🌐 Translation Pipeline            │
-│  - Language detection (KO, JA, ZH...)   │
+│  - Language Detect (KR, JP, CN, etc.)   │
 │  - Translate to English                 │
 └─────────────────────────────────────────┘
        │
        ▼
 ┌─────────────────────────────────────────┐
 │      🧠 Brain (LFM2.5-1.2B)             │
-│  - Intent analysis                      │
+│  - Intent Analysis                      │
 │  - Routing: TOOL / REASONER / DIRECT    │
 └─────────────────────────────────────────┘
        │
@@ -156,15 +158,16 @@ User Input (Multilingual)
     ▼                 ▼              ▼
 ┌─────────┐     ┌──────────┐   ┌──────────┐
 │  TOOL   │     │ REASONER │   │  DIRECT  │
-│Weather  │     │Code/Math │   │  Chat    │
+│ Weather/ │     │ Code/Math │   │ Chat     │
+│ Search  │     │          │   │          │
 └─────────┘     └──────────┘   └──────────┘
        │              │              │
        └──────────────┴──────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────┐
-│      🌐 Response Translation            │
-│  - English → Original language          │
+│      🌐 Response Translation             │
+│  - English → Original Language          │
 └─────────────────────────────────────────┘
        │
        ▼
@@ -177,53 +180,57 @@ User Input (Multilingual)
 
 ```
 Tiny-MoA/
-├── pyproject.toml          # uv project config
-├── uv.lock                 # Dependency lock file
-├── requirements.txt        # pip compatible
+├── pyproject.toml          # uv project configuration
+├── uv.lock
+├── requirements.txt
 ├── README.md
 ├── README_EN.md
-├── docs/
-│   ├── implementation_plan.md
-│   ├── tool_calling_plan.md
-│   └── translation_multiagent_plan.md
-├── models/                 # GGUF models (gitignored)
-│   ├── brain/
-│   └── reasoner/
+├── LICENSE
+├── docs/                   # Documentation & Plans
+├── models/                 # GGUF Models (Brain, Reasoner)
+├── rag_storage/            # RAG Vector DB (ChromaDB)
 └── src/
-    ├── tiny_moa/           # Main module
-    │   ├── brain.py        # Brain model wrapper
-    │   ├── reasoner.py     # Reasoner model wrapper
-    │   ├── orchestrator.py # Orchestrator
-    │   └── main.py         # Entry point
-    ├── tools/              # Tool Calling
-    │   ├── schema.py       # Tool schema
-    │   ├── executor.py     # Tool executor
-    │   └── caller.py       # Tool caller
-    └── translation/        # Translation module
-        ├── detector.py     # Language detection
-        ├── translator.py   # Google Translate
-        └── pipeline.py     # Translation pipeline
+    ├── doc_processing/     # Document Conversion (Docling)
+    │   └── converter.py
+    ├── rag/                # RAG Engine
+    │   ├── engine.py       # RAG Logic
+    │   └── store.py        # Vector Store
+    ├── tiny_moa/           # Main Package
+    │   ├── cowork/         # Tiny Cowork (Agentic Workflow)
+    │   │   ├── workers/    # Specialized Workers (Brain, Tool, etc.)
+    │   │   ├── planner.py  # Task Planner
+    │   │   └── workspace.py# File System Access
+    │   ├── ui/             # TUI (Rich)
+    │   ├── brain.py        # Thinking Model Wrapper
+    │   ├── reasoner.py     # Falcon Wrapper
+    │   ├── orchestrator.py # Central Controller
+    │   └── main.py         # Entry Point
+    ├── tools/              # Tool Use
+    │   ├── executor.py     # Tool Executor (Search, Weather, etc.)
+    │   └── schema.py       # Tool Definitions
+    └── translation/        # Translation Pipeline
 ```
 
 ---
 
 ## 📅 Roadmap
 
-- [x] **Phase 0:** Model research & architecture design
-- [x] **Phase 1:** Brain + Reasoner basic implementation
-- [x] **Phase 2:** Tool Calling (weather, search, calc, time)
-- [x] **Phase 3:** Translation pipeline (English-First Strategy)
+- [x] **Phase 0:** Model Research & Architecture Design
+- [x] **Phase 1:** Basic Brain + Reasoner Implementation
+- [x] **Phase 2:** Tool Calling (Weather, Search, Calc, Time)
+- [x] **Phase 3:** Translation Pipeline (English-First Strategy)
 - [x] **Phase 4:** TUI & Thinking Model Integration (v2.1)
-- [ ] **Phase 5:** [Agent Ecosystem](docs/agent_ecosystem_vision.md)
-- [ ] **Phase 6:** [All-in-One GUI App](docs/tiny_cowork_app_vision.md)
-- [ ] **Phase 7:** [Master Roadmap](docs/v2_1_master_roadmap.md)
+- [x] **Phase 5:** Docling Document Conversion
+- [ ] **Phase 5:** [Agent Ecosystem](docs/agent_ecosystem_vision.md) Construction
+- [ ] **Phase 6:** [All-in-One GUI App](docs/tiny_cowork_app_vision.md) Development
+- [ ] **Phase 7:** [Master Roadmap](docs/v2_1_master_roadmap.md) Achievement
 
 ---
 
 ## 📚 References
 
 | Model | Link |
-|-------|------|
+|------|------|
 | LFM2.5-1.2B-Instruct | [HuggingFace](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct) |
 | LFM2.5-1.2B-Thinking | [HuggingFace](https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking) |
 | Falcon-H1-Tiny-R-0.6B | [HuggingFace](https://huggingface.co/tiiuae/Falcon-H1-Tiny-R-0.6B) |
@@ -233,7 +240,7 @@ Tiny-MoA/
 
 ## 📄 License
 
-This project is licensed under **Apache 2.0**.
+This project is distributed under the **Apache 2.0** License.
 
 ---
 
@@ -245,5 +252,5 @@ This project is licensed under **Apache 2.0**.
 ---
 
 <p align="center">
-  <b>🚀 AI for the GPU Poor! 🚀</b>
+  <b>🚀 Even the GPU Poor can enjoy AI! 🚀</b>
 </p>
