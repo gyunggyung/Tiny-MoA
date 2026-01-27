@@ -1,8 +1,8 @@
 **🇰🇷 한국어** | [🇺🇸 English](README_EN.md)
 
-# 🤖 Tiny MoA (Mixture of Agents) PoC
+# 🤖 Tiny MoA v2.1 (Unified Agentic System)
 
-> **"GPU Poor를 위한 AI 군단"** - 4B 모델 하나 대신, 1.2B Brain + 600M Reasoner + 90M Tool Caller 조합으로 더 나은 성능을!
+> **"GPU Poor를 위한 AI 군단"** - 1.2B Thinking Model이 스스로 계획하고 600M Reasoner + 90M Tool Caller 조합으로 복잡한 작업을 수행합니다. ✨
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://python.org)
@@ -13,11 +13,11 @@
 
 ## ✨ 주요 기능
 
-- 🧠 **Multi-Agent 아키텍처**: Brain (1.2B) + Reasoner (600M) + Tool Caller (90M)
-- 🔧 **Tool Calling**: 실시간 날씨, 웹 검색, 계산, 시간 조회
-- 🌐 **다국어 지원**: 한국어, 일본어, 중국어 등 자동 번역
-- ⚡ **CPU 전용**: GPU 없이 16GB RAM으로 구동
-- 📦 **uv 지원**: 빠른 의존성 관리
+- 🧠 **Multi-Agent & Thinking**: LFM2.5-1.2B-Thinking (Brain)이 계획을 수립하고, Reasoner(600M)와 Tool Caller(90M)가 협업.
+- 🖥️ **Interactive TUI**: Rich 기반의 실시간 태스크 보드로 에이전트 간 협업 과정 시각화.
+- 🔧 **Advanced Tooling**: 날씨, 검색(DuckDuckGo), 파일 RAG, 시스템 제어 등 강력한 도구 연동.
+- 🌐 **English-First Strategy**: 영어로 추론하고 한국어로 번역하여 속도와 정확도 동시 확보.
+- ⚡ **GPU-Free**: 16GB RAM CPU 환경에서도 쾌적한 구동.
 
 ---
 
@@ -64,8 +64,8 @@ pip install -r requirements.txt
 ### 4. 모델 다운로드
 
 ```bash
-# Brain (LFM2.5-1.2B)
-huggingface-cli download LiquidAI/LFM2.5-1.2B-Instruct-GGUF \
+# Brain (LFM2.5-1.2B-Thinking) - *New in v2.1*
+huggingface-cli download LiquidAI/LFM2.5-1.2B-Thinking-GGUF \
     --include "*Q4_K_M.gguf" --local-dir ./models/brain
 
 # Reasoner (Falcon-R-0.6B)
@@ -80,14 +80,21 @@ huggingface-cli download tiiuae/Falcon-H1-Tiny-R-0.6B-GGUF \
 ### uv 사용 (권장)
 
 ```bash
-# 단일 쿼리
-uv run python -m tiny_moa.main --query "서울 날씨 어때?"
+# 1. 기본 실행 (TUI 모드 + Thinking)
+uv run python -m tiny_moa.main --thinking --show-thinking --tui --query "서울과 도쿄 날씨 비교해줘"
 
-# 대화형 모드
+# 2. 대화형 모드
 uv run python -m tiny_moa.main --interactive
 
-# 파일 참조
-uv run python -m tiny_moa.main --query "@[1706.03762v7-split.pdf] 이 논문의 주요 아이디어가 뭐야?"
+# 3. 긴 문맥 처리 (복잡한 리포트 생성 시)
+uv run python -m tiny_moa.main --thinking --tui --n-ctx 12288 --query "..."
+
+# 4. 파일 참조 (RAG)
+uv run python -m tiny_moa.main --thinking --tui --query "@[1706.03762v7-split.pdf] 이 논문의 주요 아이디어가 뭐야?"
+
+# 5. 웹 검색 (뉴스/정보)
+uv run python -m tiny_moa.main --thinking --tui --query "최신 AI 뉴스 찾아줘"
+
 ```
 
 ### pip 환경 사용
@@ -120,7 +127,7 @@ python -m tiny_moa.main --query "서울 날씨 어때?"
 
 | 역할 | 모델 | 파라미터 | 메모리 |
 |------|------|----------|--------|
-| 🧠 **Brain** | LFM2.5-1.2B-Instruct | 1.17B | ~0.8GB |
+| 🧠 **Brain** | LFM2.5-1.2B-Thinking | 1.17B | ~0.8GB |
 | 🤔 **Reasoner** | Falcon-H1-Tiny-R-0.6B | 600M | ~0.4GB |
 | 🔧 **Tool Caller** | Falcon-Tool-Calling-90M | 90M | ~0.1GB |
 
@@ -207,10 +214,12 @@ Tiny-MoA/
 - [x] **Phase 0:** 모델 연구 및 아키텍처 설계
 - [x] **Phase 1:** Brain + Reasoner 기본 구현
 - [x] **Phase 2:** Tool Calling (날씨, 검색, 계산, 시간)
-- [x] **Phase 3:** 번역 파이프라인 (다국어 지원)
-- [x] **Phase 4:** uv 환경 설정
+- [x] **Phase 3:** 번역 파이프라인 (English-First Strategy 적용)
+- [x] **Phase 4:** TUI 및 Thinking Model 통합 (v2.1)
 - [ ] **Phase 5:** Docling 문서 변환
-- [ ] **Phase 6:** RAG 시스템
+- [ ] **Phase 5:** [Agent Ecosystem](docs/agent_ecosystem_vision.md) 구축
+- [ ] **Phase 6:** [All-in-One GUI App](docs/tiny_cowork_app_vision.md) 개발
+- [ ] **Phase 7:** [Master Roadmap](docs/v2_1_master_roadmap.md) 달성
 
 ---
 

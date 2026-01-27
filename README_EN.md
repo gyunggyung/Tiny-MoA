@@ -1,8 +1,8 @@
 [🇰🇷 한국어](README.md) | **🇺🇸 English**
 
-# 🤖 Tiny MoA (Mixture of Agents) PoC
+# 🤖 Tiny MoA v2.1 (Unified Agentic System)
 
-> **"AI Legion for the GPU Poor"** - Instead of one 4B model, combine 1.2B Brain + 600M Reasoner + 90M Tool Caller for better performance!
+> **"AI Legion for the GPU Poor"** - 1.2B Thinking Model autonomously plans and executes complex tasks! ✨
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.10+-green.svg)](https://python.org)
@@ -13,11 +13,11 @@
 
 ## ✨ Key Features
 
-- 🧠 **Multi-Agent Architecture**: Brain (1.2B) + Reasoner (600M) + Tool Caller (90M)
-- 🔧 **Tool Calling**: Real-time weather, web search, calculator, time queries
-- 🌐 **Multilingual Support**: Auto-translation for Korean, Japanese, Chinese, etc.
-- ⚡ **CPU Only**: Runs on 16GB RAM without GPU
-- 📦 **uv Support**: Fast dependency management
+- 🧠 **Multi-Agent & Thinking**: LFM2.5-1.2B-Thinking (Brain) plans, collaborating with Reasoner (600M) & Tool Caller (90M).
+- 🖥️ **Interactive TUI**: Rich-based real-time task dashboard visualizing collaboration process.
+- 🔧 **Advanced Tooling**: Weather, Search (DuckDuckGo), File RAG, System Control.
+- 🌐 **English-First Strategy**: Reason in English, Translate to Local Language for speed & accuracy.
+- ⚡ **GPU-Free**: Runs smoothly on 16GB RAM CPU.
 
 ---
 
@@ -64,8 +64,8 @@ pip install -r requirements.txt
 ### 4. Download Models
 
 ```bash
-# Brain (LFM2.5-1.2B)
-huggingface-cli download LiquidAI/LFM2.5-1.2B-Instruct-GGUF \
+# Brain (LFM2.5-1.2B-Thinking) - *New in v2.1*
+huggingface-cli download LiquidAI/LFM2.5-1.2B-Thinking-GGUF \
     --include "*Q4_K_M.gguf" --local-dir ./models/brain
 
 # Reasoner (Falcon-R-0.6B)
@@ -80,11 +80,20 @@ huggingface-cli download tiiuae/Falcon-H1-Tiny-R-0.6B-GGUF \
 ### Using uv (Recommended)
 
 ```bash
-# Single query
-uv run python -m tiny_moa.main --query "How is the weather in Seoul?"
+# 1. Basic Run (TUI + Thinking)
+uv run python -m tiny_moa.main --thinking --show-thinking --tui --query "Compare weather in Seoul and Tokyo"
 
-# Interactive mode
+# 2. Interactive Mode
 uv run python -m tiny_moa.main --interactive
+
+# 3. Long Context (Complex Reports)
+uv run python -m tiny_moa.main --thinking --tui --n-ctx 12288 --query "..."
+
+# 4. File Reference (RAG)
+uv run python -m tiny_moa.main --thinking --tui --query "@[1706.03762v7-split.pdf] What is the main idea of this paper?"
+
+# 5. Web Search (News/Info)
+uv run python -m tiny_moa.main --thinking --tui --query "Find the latest AI news"
 ```
 
 ### Using pip environment
@@ -116,7 +125,7 @@ python -m tiny_moa.main --query "How is the weather in Seoul?"
 
 | Role | Model | Parameters | Memory |
 |------|-------|------------|--------|
-| 🧠 **Brain** | LFM2.5-1.2B-Instruct | 1.17B | ~0.8GB |
+| 🧠 **Brain** | LFM2.5-1.2B-Thinking | 1.17B | ~0.8GB |
 | 🤔 **Reasoner** | Falcon-H1-Tiny-R-0.6B | 600M | ~0.4GB |
 | 🔧 **Tool Caller** | Falcon-Tool-Calling-90M | 90M | ~0.1GB |
 
@@ -203,10 +212,11 @@ Tiny-MoA/
 - [x] **Phase 0:** Model research & architecture design
 - [x] **Phase 1:** Brain + Reasoner basic implementation
 - [x] **Phase 2:** Tool Calling (weather, search, calc, time)
-- [x] **Phase 3:** Translation pipeline (multilingual support)
-- [x] **Phase 4:** uv environment setup
-- [ ] **Phase 5:** Docling document conversion
-- [ ] **Phase 6:** RAG system
+- [x] **Phase 3:** Translation pipeline (English-First Strategy)
+- [x] **Phase 4:** TUI & Thinking Model Integration (v2.1)
+- [ ] **Phase 5:** [Agent Ecosystem](docs/agent_ecosystem_vision.md)
+- [ ] **Phase 6:** [All-in-One GUI App](docs/tiny_cowork_app_vision.md)
+- [ ] **Phase 7:** [Master Roadmap](docs/v2_1_master_roadmap.md)
 
 ---
 
