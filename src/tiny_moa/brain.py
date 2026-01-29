@@ -124,10 +124,58 @@ class Brain:
         """
         user_lower = user_input.lower()
         
+        # [Fast Path 0] 최신 정보 패턴 감지 (TOOL - search_web)
+        # 연도(2023~2030), 버전(GPT-5, MoA 2.0, Claude 4), 최신 키워드
+        # 지식의 한계를 미리 체크하여 LLM의 잘못된 판단 방지
+        import re
+        year_pattern = r'(202[3-9]|203[0-9])년?'
+        version_pattern = r'(?:gpt|claude|moa|iphone|gemini|llama|mistral|qwen|v\.)[- ]?\d'
+        recent_keywords = ["최신", "최근", "latest", "newest", "recent", "올해", "지난주", "어제"]
+        
+        if re.search(year_pattern, user_input) or re.search(version_pattern, user_lower) or any(k in user_lower for k in recent_keywords):
+            return {"route": "TOOL", "specialist_prompt": user_input, "tool_hint": "search_web"}
+
+        # [Fast Path 0.1] DIRECT 즉시 라우팅 (인사, 감사, 요약, 번역, 설명, 개념 질문)
+        direct_fast = ["안녕", "hello", "hi ", "고마워", "감사", "thanks", "thank you", "반가워", "bye", "안녕히",
+                      "요약해줘", "요약해", "정리해줘", "summarize", "summary", "번역해줘", "translate", 
+                      "설명해줘", "explain", "차이점", "difference"]
+        
+        # "뭐야", "what is" 패턴: TOOL 키워드 없으면 DIRECT (개념 설명)
+        concept_patterns = ["뭐야", "뭘까", "what is", "what's"]
+        tool_keywords = ["날씨", "weather", "뉴스", "news", "검색", "search", "시간", "time", "버전", "version"]
+        
+        if any(k in user_lower for k in direct_fast):
+            return {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
+        
+        # 개념 질문 (뭐야): 기술/도구 관련이면 TOOL(검색), 아니면 DIRECT
+        if any(k in user_lower for k in concept_patterns):
+            # 기술/도구 명칭이 있으면 검색이 필요 (TOOL)
+            tech_terms = ["uv", "docker", "kubernetes", "npm", "pip", "git", "rust", "cargo", 
+                         "langchain", "pytorch", "tensorflow", "react", "vue", "angular"]
+            if any(t in user_lower for t in tech_terms) or not any(t in user_lower for t in tool_keywords):
+                # 기술 용어가 있거나, 단순 개념 질문
+                if any(t in user_lower for t in tech_terms):
+                    return {"route": "TOOL", "specialist_prompt": user_input, "tool_hint": "search_web"}
+                # 일반 개념 질문 (JSON이 뭐야?)
+                if not any(t in user_lower for t in tool_keywords):
+                    return {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
+        
+        # [Fast Path 0.5] TOOL 즉시 라우팅 (계산)
+        calc_keywords = ["더해", "빼줘", "곱해", "나눠", "계산해", "calculate", "+", "-", "*", "/"]
+        if any(k in user_lower for k in calc_keywords):
+            return {"route": "TOOL", "specialist_prompt": user_input, "tool_hint": "calculate"}
+        
+
+        # [Fast Path 1] REASONER 즉시 라우팅 (코드, 알고리즘)
+        reasoner_fast = ["함수 작성", "알고리즘 구현", "코드 작성", "피보나치", "fibonacci", "퀵소트", "quicksort", 
+                        "aime", "문제 풀", "버그 찾", "디버깅", "debug", "최적화해줘", "optimize", "sql 쿼리"]
+        if any(k in user_lower for k in reasoner_fast):
+            return {"route": "REASONER", "specialist_prompt": user_input, "tool_hint": ""}
+        
         # [Fast Path] 키워드 기반 즉시 라우팅 (LLM 호출 전)
         # 명백한 도구 요청("날씨", "버전 확인")은 LLM을 거치지 않고 바로 처리하여 속도/정확도 향상
         
-        # 1. 코딩/창작 관련 키워드가 있으면 Fast Path 건너뜀 (REASONER 가능성)
+        # 코딩/창작 관련 키워드가 있으면 Fast Path 건너뜀 (REASONER 가능성)
         creation_keywords = ["write", "code", "create", "generate", "function", "script", "class", "impl", "작성", "만들", "구현", "짜줘"]
         is_creation = any(k in user_lower for k in creation_keywords)
         
@@ -219,6 +267,84 @@ class Brain:
         
         return {"route": "DIRECT", "specialist_prompt": "", "tool_hint": ""}
     
+    def route_pipeline(self, user_input: str) -> list:
+        """
+        다중 라우팅 파이프라인: 복합 작업을 여러 단계로 분해
+        
+        예: "최신 AI 트렌드 검색해서 요약해줘" 
+            → [{"route": "TOOL", "tool_hint": "search_web", ...}, 
+               {"route": "DIRECT", "task": "요약", ...}]
+        
+        Returns:
+            list of routing decisions (순차 실행)
+        """
+        import re
+        user_lower = user_input.lower()
+        
+        # ============================================
+        # [Step 1] 복합 작업 패턴 감지
+        # ============================================
+        
+        # 패턴: "~해서 ~해줘" (검색해서 요약해줘, 찾아서 설명해줘)
+        # 주의: 단순 요청("알려줘")과 복합 요청("알려주고 판단해줘")을 구분해야 함
+        compound_patterns = [
+            # (TOOL 트리거, 후속 DIRECT 작업)
+            (r'검색.{0,5}(요약|정리|설명|번역)', 'search_web', None),
+            (r'찾아.{0,5}(요약|정리|설명|번역)', 'search_web', None),
+            # 날씨: "알려주고 판단해" 같은 연결 패턴만 (단순 "알려줘"는 제외)
+            (r'날씨.{0,10}(판단|추천|필요)', 'get_weather', None),
+            (r'날씨.{0,5}알려.{0,5}(판단|추천|필요)', 'get_weather', None),
+            (r'뉴스.{0,5}(요약|정리|브리핑)', 'search_news', None),
+            (r'(버전|version).{0,10}(설명해)', 'search_web', None),
+            # RAG + 날씨 복합 패턴: "문서 요약하고 날씨도 알려줘"
+            (r'(요약|정리).{0,15}날씨.{0,5}(알려|확인)', 'get_weather', 'with_rag'),
+            (r'날씨.{0,5}(알려|도).{0,10}(요약|정리)', 'get_weather', 'with_rag'),
+        ]
+        
+        # 영어 패턴
+        compound_patterns_en = [
+            (r'search.{0,10}(summarize|explain|translate)', 'search_web', None),
+            (r'find.{0,10}(summarize|explain|translate)', 'search_web', None),
+            (r'weather.{0,10}(need|should|recommend)', 'get_weather', None),
+            (r'news.{0,10}(summarize|brief)', 'search_news', None),
+        ]
+        
+        all_patterns = compound_patterns + compound_patterns_en
+        
+        for pattern, tool_hint, _ in all_patterns:
+            match = re.search(pattern, user_lower)
+            if match:
+                # 후속 작업 추출
+                follow_up_task = match.group(1) if match.lastindex else "처리"
+                
+                # 파이프라인 생성
+                pipeline = [
+                    {
+                        "route": "TOOL",
+                        "specialist_prompt": user_input,
+                        "tool_hint": tool_hint,
+                        "step": 1,
+                        "description": f"{tool_hint} 실행"
+                    },
+                    {
+                        "route": "DIRECT",
+                        "specialist_prompt": "",
+                        "tool_hint": "",
+                        "step": 2,
+                        "description": f"결과 {follow_up_task}",
+                        "context_from_step": 1  # Step 1의 결과를 컨텍스트로 사용
+                    }
+                ]
+                return pipeline
+        
+        # ============================================
+        # [Step 2] 복합 패턴 없으면 단일 라우팅
+        # ============================================
+        single_route = self.route(user_input)
+        single_route["step"] = 1
+        single_route["description"] = f"{single_route['route']} 단일 실행"
+        return [single_route]
+
     def direct_respond(self, user_input: str, system_prompt: Optional[str] = None) -> str:
         """
         Brain이 직접 응답 (일반 대화, 한국어)
@@ -273,12 +399,15 @@ class Brain:
                 for raw in raw_sections:
                     if "DATA:" in raw:
                         # Extract JSON part after "DATA:"
-                        json_str = raw.split("DATA:", 1)[1].strip()
+                        data_str = raw.split("DATA:", 1)[1].strip()
                         try:
-                            data = eval(json_str)
+                            data = eval(data_str)
                             sections.append(data)
                         except:
-                            pass
+                            # If not a valid python dict/json, treat as plain text
+                            # (e.g. Brain summary output)
+                            if data_str:
+                                sections.append({"type": "text", "content": data_str})
             else:
                 # Try parsing as single JSON
                 try:
@@ -286,12 +415,18 @@ class Brain:
                     if isinstance(data, dict):
                          sections.append(data)
                 except:
-                    pass
+                    # Treat entire output as text if not JSON
+                    sections.append({"type": "text", "content": specialist_output})
 
             # [Deterministic Formatting]
             final_formatted_blocks = []
             for data in sections:
                 if not isinstance(data, dict): continue
+                
+                # Check for plain text wrapper
+                if data.get("type") == "text" and "content" in data:
+                    final_formatted_blocks.append(data["content"])
+                    continue
                 
                 # Unwrap 'result' if present (Cowork Tool Result wrapper)
                 # {'success': True, 'tool': 'search_news', 'result': {'results': [...]}}
@@ -434,168 +569,181 @@ Example: `* AI News - content... (Link: https://example.com/article/ar-12345)`
     def decompose_query(self, user_input: str) -> List[str]:
         """
         사용자의 복잡한 질문을 여러 개의 간단한 Tool 검색 쿼리로 분해합니다.
-        LLM을 우선 사용하고, 실패 시 정규식/휴리스틱으로 fallback합니다.
+        v4: 휴리스틱 전용 (LLM 제거) - 속도 최적화 + 정확도 향상
         """
         import logging
-        from typing import List, Optional
-        import re # Ensure re is imported if not already
+        import re
 
+        # [Step 0] 토픽 자동 감지 (정밀화 - 순서 중요!)
+        topic = ""
+        topic_keywords = {
+            "날씨": ["날씨", "weather", "기온", "온도"],
+            "뉴스": ["뉴스", "news", "기사", "article", "소식"],
+            "주가": ["주가", "주식", "stock", "price"],
+            "시간": ["시간", "time", "몇시"],
+            "계산": ["더해", "빼", "곱해", "나눠", "계산", "calculate", "+", "-", "*", "/"],
+        }
+        
+        # 토픽 감지 (가장 먼저 매칭되는 것 사용)
+        for t, keywords in topic_keywords.items():
+            if any(k in user_input.lower() for k in keywords):
+                topic = t
+                break
+
+        # [Step 1] 비교/차이점 태스크 감지
+        has_compare = any(k in user_input.lower() for k in ["비교", "compare", "vs", "차이", "difference"])
+        
+        # ===============================================
+        # [v4] 휴리스틱 전용 (정밀 패턴 매칭)
+        # ===============================================
+        
+        # Step 1: 다양한 연결어 패턴으로 분리
+        # 한글: 과, 와, 랑, 이랑, 하고
+        # 영어: and, or, vs, &
+        # 기호: ,
+        split_pattern = r"""
+            (?<=[가-힣A-Za-z0-9])(?:과|와|랑|이랑|하고)\s*  |  # 한글 조사
+            \s*,\s*  |                                        # 콤마
+            \s+(?:그리고|and|or|vs|또는|&)\s+                  # 연결어
+        """
+        parts = re.split(split_pattern, user_input, flags=re.VERBOSE)
+        
+        # Step 2: 각 파트에서 핵심 엔티티 추출
+        entities = []
+        
+        # 확장된 불용어
+        stopwords = {
+            # 한국어 동사/조사
+            "날씨", "날씨를", "날씨와", "날씨는", "뉴스", "뉴스를", "검색", "검색해줘",
+            "비교해봐", "비교", "알려줘", "해줘", "차이점", "차이", "보여줘",
+            "그리고", "의", "을", "를", "가", "이", "는", "은", "에서", "으로", "에게",
+            # 영어
+            "weather", "news", "search", "compare", "difference", "tell", "show", "me", "the",
+            "what", "is", "how", "about", "please", "in", "of", "to", "for", "a", "an",
+        }
+        
+        # 토픽 키워드도 불용어에 추가
+        for keywords in topic_keywords.values():
+            for kw in keywords:
+                stopwords.add(kw.lower())
+        
+        for part in parts:
+            if not part:
+                continue
+            part = part.strip()
+            
+            # 공백으로 추가 분리
+            words = part.split()
+            for word in words:
+                word_clean = word.strip()
+                
+                # 한국어 조사 제거 (긴 것부터)
+                suffixes_ko = ["에서", "으로", "에게", "의", "를", "을", "이", "가", "은", "는"]
+                for suffix in suffixes_ko:
+                    if word_clean.endswith(suffix) and len(word_clean) > len(suffix) + 1:
+                        word_clean = word_clean[:-len(suffix)]
+                        break
+                
+                # 영어 소유격 제거
+                if word_clean.endswith("'s"):
+                    word_clean = word_clean[:-2]
+                
+                # 불용어 및 길이 체크
+                if word_clean and word_clean.lower() not in stopwords and len(word_clean) >= 2:
+                    # 숫자 처리: 계산 토픽일 때는 숫자 유지
+                    if word_clean.isdigit() and topic != "계산":
+                        continue
+                    entities.append(word_clean)
+        
+        # 중복 제거 (순서 유지)
+        entities = list(dict.fromkeys(entities))
+        
+        # [Step 3] 결과 생성
+        if len(entities) >= 1:
+            # 토픽 붙이기
+            if topic:
+                final_queries = [f"{ent} {topic}" for ent in entities]
+            else:
+                final_queries = entities.copy()
+            
+            # 비교 태스크 추가
+            if has_compare and len(final_queries) >= 2:
+                final_queries.append("Compare results")
+                logging.info(f"[Brain] Added compare task")
+            
+            logging.info(f"[Brain] Heuristic v4: {final_queries}")
+            return final_queries
+        
+        # Fallback: 원본 반환
+        return [user_input]
+        
+        # ===============================================
+        # [Fallback] LLM 분해 (휴리스틱 실패 시)
+        # ===============================================
         try:
-            # LLM Prompt for Decomposition
-            # [Critical Fix] Prevent splitting simple tasks into steps. 
-            # We want Tool PARALLELIZATION, not Step-by-Step planning.
-            prompt = f"""<|startoftext|>
-Task: detailed analysis of whether to split the query.
-Query: "{user_input}"
-
-Rules:
-1. ONLY split if the user asks for TWO DIFFERENT things (e.g. "Seoul AND Tokyo").
-2. Do NOT split a single request into "Check" and "Provide". That is redundant.
-3. If it's a single location/topic, return the original query as the ONLY line.
-
-Examples:
-"Seoul weather" ->
-Seoul weather
-
-"Seoul and Tokyo weather" ->
-Seoul weather
-Tokyo weather
-
-"Check weather in Seoul" ->
-Check weather in Seoul
-
-"Seoul weather?" ->
-Seoul weather
-
-User: "{user_input}"
-Result:
+            # LFM2.5 Chat Template + Few-shot
+            prompt = f"""<|startoftext|><|im_start|>system
+You extract entities (cities, companies, topics) from queries. Return one entity per line. Do NOT include connectors or topic words.
+<|im_end|>
+<|im_start|>user
+서울과 부산 날씨 비교해봐<|im_end|>
+<|im_start|>assistant
+서울
+부산<|im_end|>
+<|im_start|>user
+삼성과 애플 뉴스 비교해봐<|im_end|>
+<|im_start|>assistant
+삼성
+애플<|im_end|>
+<|im_start|>user
+React, Vue, Angular 차이점<|im_end|>
+<|im_start|>assistant
+React
+Vue
+Angular<|im_end|>
+<|im_start|>user
+{user_input}<|im_end|>
+<|im_start|>assistant
 """
-            # Timeout/Crash 방지를 위한 파라미터 튜닝
+            # 모델 리셋
+            if hasattr(self.model, "reset"):
+                self.model.reset()
+            
             output = self.model(
                 prompt,
-                max_tokens=128, 
-                stop=["<|im_end|>", "\n\n", "User:", "Task:", "Result:"], 
-                temperature=0.0, 
+                max_tokens=32,
+                stop=["<|im_end|>", "\n\n"],
+                temperature=0.1,  # LFM2.5 권장
+                top_k=50,
+                top_p=0.1,
+                repeat_penalty=1.05,
                 echo=False
             )
             content = output["choices"][0]["text"].strip()
             
-            # Robust Parsing
-            lines = []
+            # 파싱
+            llm_entities = []
             for line in content.split('\n'):
-                # 숫자, 불렛, 하이픈 등 제거
-                clean_line = re.sub(r"^[\d\-\*\.]+\s*", "", line.strip()).strip()
-                if len(clean_line) > 1: 
-                     lines.append(clean_line)
+                clean = line.strip().lstrip('-*0123456789. ')
+                if clean and len(clean) >= 2 and clean.lower() not in stopwords:
+                    llm_entities.append(clean)
             
-            # [Aggressive Filter] If decomposition results in more lines, check if they are just synonyms
-            if len(lines) > 1:
-                # If original query was short (< 5 words), decomposition is risky unless it has "and/,"
-                if len(user_input.split()) < 5 and not any(k in user_input for k in ["and", ",", "와", "과", "하고", "vs"]):
-                     logging.warning(f"[Brain] Decomposition rejected (Short query, no explicit separator): {lines}")
-                     return [user_input]
-                     
-                logging.info(f"[Brain] LLM Decomposition Success: {lines}")
-                return lines
-            else:
-                 # [Improvement] If LLM failed to split (returned 1 line), 
-                 # BUT we detected complex keywords/separators, fall through to Regex/Heuristic below.
-                 # Do NOT return [user_input] immediately.
-                 logging.info("[Brain] LLM returned 1 line, trying fallback heuristic...")
-                 pass 
-
+            if llm_entities:
+                if topic:
+                    final_queries = [f"{ent} {topic}" for ent in llm_entities]
+                else:
+                    final_queries = llm_entities
+                
+                if has_compare and len(final_queries) >= 2:
+                    final_queries.append("Compare results")
+                
+                logging.info(f"[Brain] LLM v3 extracted: {final_queries}")
+                return final_queries
                 
         except Exception as e:
             logging.error(f"[Brain] LLM Decomposition failed: {e}")
-            pass
-            
-        # [Fallback] 휴리스틱/Regex 분해 (LLM 실패 시)
-        # "서울과 도쿄" -> ["서울", "도쿄"] -> ["서울 날씨", "도쿄 날씨"] (날씨가 포함된 경우)
-        import re
-        topic = ""
-        if any(k in user_input for k in ["날씨", "weather", "기온", "온도"]):
-            topic = "날씨"
-        elif any(k in user_input for k in ["뉴스", "news", "기사", "article", "소식"]):
-            topic = "뉴스"
         
-        # Regex로 분리 (와/과/랑/이랑/vs/and/,)
-        # [Fix] More inclusive pattern for connectors
-        split_pattern = r"(?<=[가-힣])(?:과|와|랑|이랑)\s+|\s+(?:vs|and|&|or|또는|그리고)\s+|\s*,\s*|\s*\?\s*"
-        
-        parts = re.split(split_pattern, user_input)
-        
-        # [Fallback Enhancement] "광주 춘천 날씨" -> ["광주", "춘천", "날씨"] -> ["광주 날씨", "춘천 날씨"]
-        # LLM 실패 시, 단순 공백으로도 분리 시도
-        final_parts = []
-        for part in parts:
-            part = part.strip()
-            if not part: continue
-            
-            # 1. 이미 완성된 문장이면 패스
-            if len(part.split()) > 3: 
-                final_parts.append(part)
-                continue
-                
-            # 2. 공백으로 나눴을 때 2개 이상이고, "날씨" 같은 키워드가 포함된 경우
-            sub_parts = part.split()
-            if len(sub_parts) >= 2 and any(k in part for k in ["날씨", "weather", "기온"]):
-                # 마지막 단어가 공통 키워드일 확률 높음 (예: "서울 대전 날씨")
-                keyword = sub_parts[-1]
-                # "날씨를", "날씨는" 등 조사가 붙어도 처리가능하도록 수정
-                if any(x in keyword for x in ["날씨", "weather", "기온", "온도"]):
-                    for sub in sub_parts[:-1]:
-                        final_parts.append(f"{sub} {keyword}")
-                else:
-                    # 키워드가 명확지 않으면 그냥 다 넣음
-                    final_parts.extend(sub_parts)
-            else:
-                 final_parts.append(part)
-
-        parts = final_parts
-        
-        # [Filtering] 불용어 및 무의미한 조각 제거
-        filtered_parts = []
-        for p in parts:
-            p_clean = p.strip()
-            # 1. 너무 짧거나 특수문자만 있는 경우 제외
-            if len(p_clean) < 2: 
-                continue
-            # 2. "날씨를", "비교해줘" 등 불용어만 있는 청크 제외
-            if p_clean in ["날씨를", "날씨", "비교", "비교해줘", "알려줘", "그리고", "소개해줘", "검색해줘"]:
-                continue
-            # 3. 조사가 붙은 단독 키워드 처리 (예: "날씨는")
-            if p_clean.endswith(("날씨를", "날씨는", "날씨가")):
-                continue
-                
-            filtered_parts.append(p_clean)
-            
-        parts = filtered_parts # Update parts with filtered list
-        
-        if len(parts) > 1:
-            # 정제된 쿼리 생성
-            final_queries = []
-            for p in parts:
-                # 불필요한 서술어 제거 (비교해줘, 알려줘 등)
-                # 주의: "어때" 뒤에 오는 내용이 삭제되면 안되므로 .* 사용 시 주의.
-                # 이미 분리되었으므로 p는 "서울 날씨 어때" 형태일 것임. 따라서 .* 써도 됨.
-                clean_p = re.sub(r"(비교|compare|알려줘|해줘|어때|Check|Verify|with).*", "", p).strip()
-                
-                if not clean_p: continue
-                
-                # "도쿄 날씨" 처럼 날씨/뉴스가 이미 포함된 경우 중복 방지
-                if topic and topic not in clean_p and "날씨" not in clean_p and "뉴스" not in clean_p and "기사" not in clean_p:
-                     q = f"{clean_p} {topic}".strip()
-                else:
-                     q = clean_p
-                
-                if len(q) > 1: # 너무 짧은 쿼리 제외
-                     final_queries.append(q)
-            
-            if len(final_queries) > 1:
-                print(f"[Brain] Heuristic Decomposition: {final_queries}")
-                return final_queries
-            
-        return [user_input] # 실패 시 원본 그대로 반환
+        return [user_input]
 
 
 if __name__ == "__main__":

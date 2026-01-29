@@ -89,7 +89,7 @@ class DoclingConverter:
             raise FileNotFoundError(f"File not found: {file_path}")
             
         if path.suffix.lower() in [".md", ".txt"]:
-            self.logger.info(f"[{self.name}] Native {path.suffix} detected. Skipping Docling engine.")
+            logging.info(f"[Docling] Native {path.suffix} detected. Skipping Docling engine.")
             with open(path, "r", encoding="utf-8") as f:
                 return f.read()
                 

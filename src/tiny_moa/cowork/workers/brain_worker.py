@@ -15,7 +15,7 @@ class BrainWorker(BaseWorker):
 
         try:
             result = self.brain.direct_respond(full_prompt)
-            self.logger.info(f"[{self.name}] Brain task completed.")
+            self.logger.info(f"[{self.name}] Brain task completed. Result len: {len(str(result))}")
             return result
         except Exception as e:
             self.logger.error(f"[{self.name}] Error in BrainWorker: {e}")

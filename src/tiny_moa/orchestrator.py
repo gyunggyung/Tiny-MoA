@@ -530,7 +530,79 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         if rag_context:
              user_input += f"\n\n--- Reference Material ---\n{rag_context}\n--------------------------\n(Answer strictly based on the Reference Material above if relevant.)"
         
-        # 0.5. [Multi-Step] 복합 질문 분해 (Decomposition)
+        # 0.5. [Multi-Step Pipeline] route_pipeline() 사용하여 복합 작업 분해
+        # 예: "최신 AI 트렌드 검색해서 요약해줘" → [TOOL: search] → [DIRECT: 요약]
+        pipeline = self.brain.route_pipeline(processed_input if 'processed_input' in dir() else user_input)
+        
+        if len(pipeline) > 1:
+            # 다중 스텝 파이프라인 실행
+            if verbose:
+                console.print(f"[dim]🔗 파이프라인 감지: {len(pipeline)}단계 실행[/dim]")
+                for step in pipeline:
+                    console.print(f"[dim]   Step {step['step']}: {step['route']} - {step.get('description', '')}[/dim]")
+            
+            step_results = {}  # 각 스텝의 결과 저장
+            
+            for step in pipeline:
+                step_num = step["step"]
+                route = step["route"]
+                tool_hint = step.get("tool_hint", "")
+                
+                if verbose:
+                    console.print(f"[dim]▶ Step {step_num}: {route}[/dim]")
+                
+                if route == "TOOL":
+                    # Tool 실행
+                    result = self._handle_tool_call(
+                        user_input, 
+                        tool_hint, 
+                        step.get("specialist_prompt", ""), 
+                        verbose=verbose,
+                        return_raw=True  # Raw 결과 필요
+                    )
+                    step_results[step_num] = result
+                    
+                elif route == "DIRECT":
+                    # 이전 스텝의 결과를 컨텍스트로 사용
+                    context_from = step.get("context_from_step", step_num - 1)
+                    prev_result = step_results.get(context_from, "")
+                    
+                    # 결과 포맷팅
+                    if isinstance(prev_result, dict):
+                        prev_result = str(prev_result.get("result", prev_result))
+                    
+                    # Brain에게 요약/처리 요청
+                    with self._model_lock:
+                        final_response = self.brain.integrate_response(user_input, str(prev_result))
+                    step_results[step_num] = final_response
+                    
+                elif route == "REASONER":
+                    with self._model_lock:
+                        result = self.reasoner.solve(step.get("specialist_prompt", user_input))
+                    step_results[step_num] = result
+            
+            # 마지막 스텝 결과 반환
+            final_response = step_results.get(len(pipeline), list(step_results.values())[-1])
+            
+            if verbose:
+                console.print(Panel(
+                    Markdown(str(final_response)) if isinstance(final_response, str) else JSON.from_data(final_response),
+                    title="[bold green]🔗 파이프라인 완료[/bold green]",
+                    border_style="green",
+                ))
+            
+            # 번역 처리 (필요시)
+            if self.enable_translation and self._translation_pipeline and isinstance(final_response, str):
+                try:
+                    target_lang_ctx = self._translation_pipeline.to_english(user_input)
+                    if target_lang_ctx.is_translated:
+                        final_response = self._translation_pipeline.from_english(final_response, target_lang_ctx)
+                except Exception as e:
+                    logger.error(f"Pipeline translation failed: {e}")
+            
+            return final_response
+        
+        # 0.5.1 [Legacy] 기존 복합 질문 분해 (compare/비교 케이스)
         # "비교", "compare", "vs" 등 키워드가 있으면 분해 시도
         complex_keywords = ["비교", "compare", "vs", "difference", "차이", "어때?"] # '어때?'는 애매하지만 일단 테스트
         is_complex = any(k in user_input for k in ["비교", "compare", "vs", "difference", "차이"])
@@ -782,11 +854,18 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         # Determine if it's a simple text/file summary request (Heuristic Fast track)
         is_simple_summary = any(kw in user_goal.lower() for kw in ["요약", "정리", "summarize", "read", "읽고"]) and len(user_goal) < 50
         
-        # [Fix] If RAG context is present, FORCE fast-track summary mode (Direct)
-        if rag_context:
-            logger.info("RAG context detected. Forcing DIRECT/Summary mode.")
+        # [Fix v2] RAG + TOOL 복합 요청 감지
+        # RAG 컨텍스트가 있어도 날씨/검색/뉴스 키워드가 있으면 TOOL 라우팅 유지
+        tool_keywords = ["날씨", "weather", "검색", "search", "뉴스", "news", "시간", "time"]
+        needs_tool = any(kw in user_goal.lower() for kw in tool_keywords)
+        
+        if rag_context and not needs_tool:
+            logger.info("RAG context detected (no tool needed). Forcing DIRECT/Summary mode.")
             route = "DIRECT"
             is_simple_summary = True
+        elif rag_context and needs_tool:
+            logger.info("RAG + TOOL hybrid detected. Will execute both.")
+            # route 유지 (TOOL), is_simple_summary는 False로
 
         
         # Decisions
@@ -812,7 +891,47 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                 dashboard.add_log("Analyzing request and creating plan...", "Planner")
                 live.update(dashboard.generate_layout())
             
-            if route == "TOOL":
+            # [NEW] RAG + TOOL 복합 요청 처리
+            if rag_context and needs_tool:
+                logger.info("Creating hybrid RAG+TOOL pipeline")
+                tasks_data = []
+                
+                # 1. 문서 분석 태스크
+                tasks_data.append({
+                    "description": f"Analyze the provided file context and summarize: '{user_goal}'",
+                    "agent": "brain"
+                })
+                
+                # 2. 필요한 Tool 태스크 추가
+                user_lower = user_goal.lower()
+                if any(kw in user_lower for kw in ["날씨", "weather"]):
+                    # 도시 추출
+                    cities = ["서울", "seoul", "도쿄", "tokyo", "뉴욕", "부산", "인천", "대구"]
+                    location = "Seoul"
+                    for city in cities:
+                        if city in user_lower:
+                            location = city.title()
+                            break
+                    tasks_data.append({
+                        "description": f"{location} 날씨",
+                        "agent": "tool"
+                    })
+                
+                if any(kw in user_lower for kw in ["뉴스", "news"]):
+                    tasks_data.append({
+                        "description": "AI 최신 뉴스",
+                        "agent": "tool"
+                    })
+                
+                if any(kw in user_lower for kw in ["검색", "search"]):
+                    tasks_data.append({
+                        "description": user_goal,  # 원본 쿼리 사용
+                        "agent": "tool"
+                    })
+                
+                dashboard.add_log(f"Hybrid plan created with {len(tasks_data)} tasks.", "Planner")
+                
+            elif route == "TOOL":
                 # Decompose complex questions into simple tool tasks
                 sub_queries = self.brain.decompose_query(user_goal)
                 logger.info(f"Using TOOL decomposition: {sub_queries}")
@@ -870,6 +989,17 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
             
             parallelizable = [t for t in all_tasks if t.agent_type in ["tool", "rag"]]
             sequential = [t for t in all_tasks if t.agent_type in ["brain", "writer"]]
+            
+            # [FIX] Hybrid 모드에서는 순차 태스크(brain)를 먼저 실행
+            is_hybrid_mode = rag_context and needs_tool
+            if is_hybrid_mode:
+                # brain이 먼저, 그 다음 tool
+                first_phase = sequential
+                second_phase = parallelizable
+            else:
+                # 기존: 병렬 먼저, 순차 나중
+                first_phase = parallelizable
+                second_phase = sequential
             
             def execute_single_task(task):
                  try:
@@ -937,29 +1067,42 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                         live.update(dashboard.generate_layout())
                     raise e
 
-            # Run parallel tasks first (Independent data gathering)
-            if parallelizable:
-                logger.info(f"Running {len(parallelizable)} tasks in parallel.")
-                if len(parallelizable) > 1:
-                    # Actually use runner
-                    t_dicts = [{"id": t.id, "description": t.description, "agent": t.agent_type} for t in parallelizable]
-                    # We need to map Task objects to t_dicts for the runner
+            # Run first phase tasks
+            if first_phase:
+                logger.info(f"Running {len(first_phase)} first-phase tasks.")
+                if len(first_phase) > 1 and all(t.agent_type in ["tool", "rag"] for t in first_phase):
+                    # Parallel execution for tool/rag
+                    t_dicts = [{"id": t.id, "description": t.description, "agent": t.agent_type} for t in first_phase]
                     def runner_wrapper(t_dict):
-                        target_task = next(tt for tt in parallelizable if tt.id == t_dict['id'])
+                        target_task = next(tt for tt in first_phase if tt.id == t_dict['id'])
                         return execute_single_task(target_task)
-                    
                     runner.run_tasks(t_dicts, runner_wrapper)
                 else:
-                    for t in parallelizable: execute_single_task(t)
+                    # Sequential execution
+                    for t in first_phase: execute_single_task(t)
 
-            # Update results after parallel phase
-            for t in parallelizable:
+            # Update results after first phase
+            for t in first_phase:
                 if t.status == TaskStatus.COMPLETED:
                      results.append(f"[TASK: {t.description}]\nDATA: {t.result}")
+            logger.info(f"After first_phase: {len(results)} results collected. Last: {results[-1][:100] if results else 'NONE'}...")
 
-            # Run sequential tasks (Summary/Synthesis)
-            for t in sequential:
-                execute_single_task(t)
+            # Run second phase tasks
+            if second_phase:
+                logger.info(f"Running {len(second_phase)} second-phase tasks.")
+                if len(second_phase) > 1 and all(t.agent_type in ["tool", "rag"] for t in second_phase):
+                    # Parallel execution for tool/rag
+                    t_dicts = [{"id": t.id, "description": t.description, "agent": t.agent_type} for t in second_phase]
+                    def runner_wrapper2(t_dict):
+                        target_task = next(tt for tt in second_phase if tt.id == t_dict['id'])
+                        return execute_single_task(target_task)
+                    runner.run_tasks(t_dicts, runner_wrapper2)
+                else:
+                    # Sequential execution
+                    for t in second_phase: execute_single_task(t)
+                    
+            # Update results after second phase
+            for t in second_phase:
                 if t.status == TaskStatus.COMPLETED:
                      results.append(f"[TASK: {t.description}]\nDATA: {t.result}")
 
@@ -969,7 +1112,19 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                 live.update(dashboard.generate_layout())
             
             logger.info("Performing final integration...")
-            input_data = "\n\n".join(results)
+            
+            # [Optimization] If we have Brain task results (summaries), 
+            # we explicitly remove the raw RAG context to prevent it from overwhelming the context window
+            # or confusing the model vs the summarized output.
+            effective_results = results
+            if len(results) > 1 and "[CONTEXT FROM UPLOADED FILES]" in results[0]:
+                # Check if we have any valid task outputs (Brain/Tool)
+                has_task_output = any("[TASK:" in r for r in results[1:])
+                if has_task_output:
+                    logger.info("Removing raw RAG context from final integration input as tasks have processed it.")
+                    effective_results = results[1:]
+            
+            input_data = "\n\n".join(effective_results)
             logger.info(f"Input data to Brain: {input_data[:500]}...") # Log first 500 chars to check
             
             with self._model_lock:

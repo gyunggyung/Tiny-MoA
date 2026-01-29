@@ -62,4 +62,6 @@ output/
 tests/
 1706.03762v7-split.pdf
 rag_storage/
-linkedin_post_tiny_moa_v2_1.txt
+# linkedin_post_tiny_moa_v2_1.txt
+experiments/
+src/function_tests
