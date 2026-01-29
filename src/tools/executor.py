@@ -62,7 +62,7 @@ def get_weather(location: str, unit: str = "celsius", **kwargs) -> dict[str, Any
             clean_loc = location # 다 지워졌으면 원본 사용
 
         # Retry Logic
-        max_retries = 3
+        max_retries = 5
         for attempt in range(max_retries):
             try:
                 # Use standard browser UA to avoid blocking
@@ -96,7 +96,7 @@ def get_weather(location: str, unit: str = "celsius", **kwargs) -> dict[str, Any
             except requests.exceptions.RequestException as e:
                 if attempt == max_retries - 1:
                     raise e
-                time.sleep(1) # Wait before retry
+                time.sleep(2) # Wait before retry
                 
     except (requests.exceptions.RequestException, KeyError, IndexError, ValueError) as e:
         # [Graceful Fail] If extraction failed and API failed, return helpful error
@@ -122,12 +122,35 @@ def search_web(query: str, num_results: int = 5, **kwargs) -> dict[str, Any]:
             raw_results = list(ddgs.text(query, region=region, max_results=num_results + 3)) # 여유 있게 가져옴
             
             for r in raw_results:
-                url = r.get('url', '').lower()
+                url = r.get('href', '').lower()
                 if any(d in url for d in blocked_domains):
                     continue
                 filtered_results.append(r)
                 if len(filtered_results) >= num_results:
                     break
+            
+            # [Smart Fallback] If web search specifically failed (e.g. all blocked) but query looks like news,
+            # try search_news and map to web format.
+            if not filtered_results and "news" in query.lower():
+                try:
+                    news_data = search_news(query, num_results=num_results, **kwargs)
+                    if news_data.get("results"):
+                        return {
+                            "query": query,
+                            "region": region,
+                            "num_results": len(news_data["results"]),
+                            "results": [
+                                {
+                                    "title": item["title"],
+                                    "url": item["url"],
+                                    "snippet": f"News from {item.get('source', 'Unknown')} ({item.get('date', '')})"
+                                }
+                                for item in news_data["results"]
+                            ],
+                            "source": "duckduckgo_fallback_news"
+                        }
+                except Exception:
+                    pass # Fallback failed, just return empty
             
             results = filtered_results
             
