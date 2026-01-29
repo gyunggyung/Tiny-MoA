@@ -604,8 +604,8 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         
         # 0.5.1 [Legacy] 기존 복합 질문 분해 (compare/비교 케이스)
         # "비교", "compare", "vs" 등 키워드가 있으면 분해 시도
-        complex_keywords = ["비교", "compare", "vs", "difference", "차이", "어때?"] # '어때?'는 애매하지만 일단 테스트
-        is_complex = any(k in user_input for k in ["비교", "compare", "vs", "difference", "차이"])
+        complex_keywords = ["비교", "compare", "vs", "difference", "차이", "어때?", "각각", "separately", "each"] # '어때?'는 애매하지만 일단 테스트
+        is_complex = any(k in user_input for k in ["비교", "compare", "vs", "difference", "차이", "각각", "separately", "each"])
         
         if is_complex:
             if verbose:
@@ -918,10 +918,22 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                     })
                 
                 if any(kw in user_lower for kw in ["뉴스", "news"]):
-                    tasks_data.append({
-                        "description": "AI 최신 뉴스",
-                        "agent": "tool"
-                    })
+                    # Smart Decomposition for News: Split by connection words to isolate news context
+                    import re
+                    # Split by sentence delimiters. Do NOT split by comma to preserve entity lists (e.g. "A, B, C news")
+                    clauses = re.split(r'(?:그리고|and|\.|\?|also)\s+', user_goal)
+                    news_clauses = [c for c in clauses if any(kw in c.lower() for kw in ["뉴스", "news"])]
+                    
+                    if not news_clauses:
+                        news_clauses = [user_goal] # Fallback
+                    
+                    for clause in news_clauses:
+                        sub_qs = self.brain.decompose_query(clause)
+                        for q in sub_qs:
+                            tasks_data.append({
+                                "description": q,
+                                "agent": "tool"
+                            })
                 
                 if any(kw in user_lower for kw in ["검색", "search"]):
                     tasks_data.append({
