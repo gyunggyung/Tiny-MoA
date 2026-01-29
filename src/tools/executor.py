@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
+import re
 
 # 개별 도구 함수들
 def get_weather(location: str, unit: str = "celsius", **kwargs) -> dict[str, Any]:
@@ -102,7 +103,7 @@ def get_weather(location: str, unit: str = "celsius", **kwargs) -> dict[str, Any
         return {"error": f"Could not find weather for '{location}'. Try specifying a city name (e.g. 'Seoul'). Debug: {str(e)}"}
 
 
-def search_web(query: str, num_results: int = 5) -> dict[str, Any]:
+def search_web(query: str, num_results: int = 5, **kwargs) -> dict[str, Any]:
     """
     DuckDuckGo 웹 검색 - API 키 불필요!
     """
@@ -148,7 +149,7 @@ def search_web(query: str, num_results: int = 5) -> dict[str, Any]:
         return {"error": str(e), "query": query}
 
 
-def search_news(query: str, num_results: int = 5) -> dict[str, Any]:
+def search_news(query: str, num_results: int = 5, **kwargs) -> dict[str, Any]:
     """
     DuckDuckGo 뉴스 검색
     """
@@ -194,7 +195,7 @@ def search_news(query: str, num_results: int = 5) -> dict[str, Any]:
         return {"error": str(e), "query": query}
 
 
-def search_wikipedia(query: str, lang: str = "en") -> dict[str, Any]:
+def search_wikipedia(query: str, lang: str = "en", **kwargs) -> dict[str, Any]:
     """
     Wikipedia 검색 - API 키 불필요!
     """
@@ -220,7 +221,7 @@ def search_wikipedia(query: str, lang: str = "en") -> dict[str, Any]:
         return {"error": str(e), "query": query}
 
 
-def read_url(url: str, max_chars: int = 2000) -> dict[str, Any]:
+def read_url(url: str, max_chars: int = 2000, **kwargs) -> dict[str, Any]:
     """
     URL 내용 읽기 - 웹페이지 텍스트 추출
     """
@@ -254,7 +255,7 @@ def read_url(url: str, max_chars: int = 2000) -> dict[str, Any]:
         return {"error": str(e), "url": url}
 
 
-def execute_command(command: str, timeout: int = 30) -> dict[str, Any]:
+def execute_command(command: str, timeout: int = 30, **kwargs) -> dict[str, Any]:
     """
     터미널 명령어 실행 (Windows/Linux 호환)
     
@@ -315,7 +316,7 @@ def execute_command(command: str, timeout: int = 30) -> dict[str, Any]:
         return {"error": str(e), "command": command}
 
 
-def calculate(expression: str) -> dict[str, Any]:
+def calculate(expression: str, **kwargs) -> dict[str, Any]:
     """
     수학 계산 (안전한 eval)
     """
@@ -344,7 +345,7 @@ def calculate(expression: str) -> dict[str, Any]:
         }
 
 
-def get_current_time(timezone: str = "UTC") -> dict[str, Any]:
+def get_current_time(timezone: str = "UTC", **kwargs) -> dict[str, Any]:
     """
     현재 시간 조회
     """
