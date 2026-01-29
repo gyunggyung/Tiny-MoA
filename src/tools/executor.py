@@ -107,13 +107,32 @@ def search_web(query: str, num_results: int = 5) -> dict[str, Any]:
     DuckDuckGo 웹 검색 - API 키 불필요!
     """
     from duckduckgo_search import DDGS
+    # [Fix] 기본 리전 'us-en' (글로벌/영어 우선)
+    # 단, 한국어 쿼리가 명확하면 'kr-kr' 유지
+    region = "us-en"
+    if re.search(r'[가-힣]', query):
+        region = "kr-kr"
     
+    filtered_results = []
+    blocked_domains = ['zhihu.com', 'baidu.com', '163.com', 'sohu.com', 'weibo.com', 'csdn.net', 'bilibili.com']
+
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=num_results))
+            raw_results = list(ddgs.text(query, region=region, max_results=num_results + 3)) # 여유 있게 가져옴
+            
+            for r in raw_results:
+                url = r.get('url', '').lower()
+                if any(d in url for d in blocked_domains):
+                    continue
+                filtered_results.append(r)
+                if len(filtered_results) >= num_results:
+                    break
+            
+            results = filtered_results
             
             return {
                 "query": query,
+                "region": region,
                 "num_results": len(results),
                 "results": [
                     {
@@ -134,12 +153,31 @@ def search_news(query: str, num_results: int = 5) -> dict[str, Any]:
     DuckDuckGo 뉴스 검색
     """
     from duckduckgo_search import DDGS
+    import re
     
+    # [Fix] 뉴스 검색은 사용자 요청대로 'us-en' (글로벌) 우선.
+    # 한국어 쿼리여도 글로벌 뉴스가 더 중요하다고 함.
+    region = "us-en"
+    
+    filtered_results = []
+    blocked_domains = ['zhihu.com', 'baidu.com', '163.com', 'sohu.com', 'weibo.com', 'csdn.net']
+
     try:
         with DDGS() as ddgs:
-            results = list(ddgs.news(query, max_results=num_results))
+            raw_results = list(ddgs.news(query, region=region, max_results=num_results + 3))
+            
+            for r in raw_results:
+                url = r.get('url', '').lower()
+                if any(d in url for d in blocked_domains):
+                    continue
+                filtered_results.append(r)
+                if len(filtered_results) >= num_results:
+                    break
+            
+            results = filtered_results
             return {
                 "query": query,
+                "region": region,
                 "num_results": len(results),
                 "results": [
                     {

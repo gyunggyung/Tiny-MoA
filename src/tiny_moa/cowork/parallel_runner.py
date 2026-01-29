@@ -36,11 +36,18 @@ class ParallelRunner:
         for future in concurrent.futures.as_completed(future_to_task):
             task = future_to_task[future]
             try:
-                data = future.result()
+                data = future.result(timeout=60)
                 final_results[task['id']] = TaskResult(
                     task_id=task['id'],
                     success=True,
                     result=data
+                )
+            except concurrent.futures.TimeoutError:
+                 final_results[task['id']] = TaskResult(
+                    task_id=task['id'],
+                    success=False,
+                    result=None,
+                    error="Task timed out after 60s"
                 )
             except Exception as exc:
                 final_results[task['id']] = TaskResult(

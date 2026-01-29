@@ -113,7 +113,8 @@ class Brain:
     
     def get_prompt_prefix(self) -> str:
         """Returns the prompt prefix (e.g. <|startoftext|>)"""
-        return "<|startoftext|>"
+        # llama-cpp-python automatically adds BOS token, so we return empty to avoid duplication
+        return ""
     
     def route(self, user_input: str) -> dict:
         """
@@ -217,7 +218,8 @@ class Brain:
             self.model.reset()
         
         # ChatML 포맷 수동 구성 (Official Template: <|startoftext|><|im_start|>system...)
-        prefix = "<|startoftext|>"
+        prefix = "" # Automatic BOS
+
         prompt = f"""{prefix}<|im_start|>system
 {ROUTER_SYSTEM_PROMPT}<|im_end|>
 <|im_start|>user
@@ -423,9 +425,14 @@ class Brain:
             for data in sections:
                 if not isinstance(data, dict): continue
                 
-                # Check for plain text wrapper
+                # Check for plain text wrapper (Brain Summary)
                 if data.get("type") == "text" and "content" in data:
-                    final_formatted_blocks.append(data["content"])
+                    # Give it a nice header if it's substantial text
+                    content = data["content"].strip()
+                    if len(content) > 50:
+                        final_formatted_blocks.append(f"### 📋 **Report**\n{content}")
+                    else:
+                        final_formatted_blocks.append(content)
                     continue
                 
                 # Unwrap 'result' if present (Cowork Tool Result wrapper)
@@ -440,8 +447,8 @@ class Brain:
                 if "results" in target_data and isinstance(target_data["results"], list):
                     block_lines = []
                     # Add query as header if available
-                    q = target_data.get("query", "")
-                    if q: block_lines.append(f"results for '{q}':")
+                    q = target_data.get("query", "Search Results")
+                    block_lines.append(f"### 📰 **{q}**")
                     
                     for item in target_data["results"]:
                         if isinstance(item, dict):
@@ -450,12 +457,14 @@ class Brain:
                             snippet = item.get("snippet", item.get("description", ""))
                             # Clean snippet
                             snippet = snippet.replace("\n", " ")[:200]
-                            # Format: * Title
-                            #           Summary...
-                            #           Link: [Click to Read](URL)
-                            # Using Markdown link syntax prevents long URL text from wrapping and breaking in TUI.
-                            # Rich will render this as a clickable alias.
-                            block_lines.append(f"* {title}\n  {snippet}\n  🔗 [Click to Read]({url})")
+                            
+                            # Elegant Markdown Format using Blockquote
+                            entry = (
+                                f"> **{title}**\n"
+                                f"> {snippet}...\n"
+                                f"> 🔗 [Read Source]({url})\n"
+                            )
+                            block_lines.append(entry)
                     if block_lines:
                         final_formatted_blocks.append("\n".join(block_lines))
                         continue
@@ -467,14 +476,21 @@ class Brain:
                     location = target_data.get("location", "City")
                     temp = target_data.get("temperature", "")
                     cond = target_data.get("condition", "")
-                    final_formatted_blocks.append(f"* {location} Weather - {temp} / {cond}")
+                    
+                    # Modern Card-like Format
+                    weather_block = (
+                        f"### 🌦️ **{location} Weather**\n"
+                        f"- **Temperature**: {temp}\n"
+                        f"- **Condition**: {cond}"
+                    )
+                    final_formatted_blocks.append(weather_block)
                     continue
                 
                 # 3. Fallback (Generic Dict)
                 fallback_lines = []
                 for k, v in target_data.items():
                     if isinstance(v, (str, int, float, bool)):
-                        fallback_lines.append(f"- {k}: {v}")
+                        fallback_lines.append(f"- **{k}**: {v}")
                 if fallback_lines:
                     final_formatted_blocks.append("\n".join(fallback_lines))
 
@@ -617,9 +633,12 @@ Example: `* AI News - content... (Link: https://example.com/article/ar-12345)`
             "날씨", "날씨를", "날씨와", "날씨는", "뉴스", "뉴스를", "검색", "검색해줘",
             "비교해봐", "비교", "알려줘", "해줘", "차이점", "차이", "보여줘",
             "그리고", "의", "을", "를", "가", "이", "는", "은", "에서", "으로", "에게",
+            "문서", "파일", "핵심", "내용", "부분", "관련", "대해", "위해", "통해",
+            "최신", "최근", "오늘", "지금", "이번주", "현재",
             # 영어
             "weather", "news", "search", "compare", "difference", "tell", "show", "me", "the",
             "what", "is", "how", "about", "please", "in", "of", "to", "for", "a", "an",
+            "latest", "recent", "today", "now", "current",
         }
         
         # 토픽 키워드도 불용어에 추가
