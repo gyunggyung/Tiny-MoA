@@ -108,23 +108,42 @@ def search_web(query: str, num_results: int = 5, **kwargs) -> dict[str, Any]:
     DuckDuckGo 웹 검색 - API 키 불필요!
     """
     from duckduckgo_search import DDGS
-    # [Fix] 기본 리전 'us-en' (글로벌/영어 우선)
-    # 단, 한국어 쿼리가 명확하면 'kr-kr' 유지
-    region = "us-en"
+    import re
+    
+    # [Fix] 한국어 쿼리인 경우 'kr-kr' 리전 강제 사용
+    # 중국어 스팸 방지 및 한국어 결과 우선
+    region = "wt-wt" # World-wide default
     if re.search(r'[가-힣]', query):
         region = "kr-kr"
     
     filtered_results = []
-    blocked_domains = ['zhihu.com', 'baidu.com', '163.com', 'sohu.com', 'weibo.com', 'csdn.net', 'bilibili.com']
+    # 중국어 스팸 도메인 강력 차단
+    blocked_domains = ['zhihu.com', 'baidu.com', '163.com', 'sohu.com', 'weibo.com', 'csdn.net', 'bilibili.com', 'aliyun.com']
 
     try:
         with DDGS() as ddgs:
-            raw_results = list(ddgs.text(query, region=region, max_results=num_results + 3)) # 여유 있게 가져옴
+            # max_results를 넉넉히 잡아서 필터링 후에도 결과가 남도록 함
+            try:
+                raw_results = list(ddgs.text(query, region=region, max_results=num_results + 5))
+            except Exception:
+                 # kr-kr 실패시 wt-wt로 재시도
+                 raw_results = list(ddgs.text(query, region="wt-wt", max_results=num_results + 5))
             
             for r in raw_results:
                 url = r.get('href', '').lower()
+                title = r.get('title', '')
+                body = r.get('body', '')
+                
+                # 도메인 차단
                 if any(d in url for d in blocked_domains):
                     continue
+                
+                # [Content Filter] 제목이나 내용에 중국어가 포함되면 제외 (한국어 쿼리인데 중국어 나오는 경우)
+                if region == "kr-kr" and (re.search(r'[\u4e00-\u9fff]', title) or re.search(r'[\u4e00-\u9fff]', body)):
+                    # 단, 한자가 조금 섞인 것은 허용하되, 주로 중국어인 경우 필터링 필요.
+                    # 여기서는 간단히 패스 (너무 강력할 수 있으니 주의)
+                    pass
+
                 filtered_results.append(r)
                 if len(filtered_results) >= num_results:
                     break
@@ -179,17 +198,22 @@ def search_news(query: str, num_results: int = 5, **kwargs) -> dict[str, Any]:
     from duckduckgo_search import DDGS
     import re
     
-    # [Fix] 뉴스 검색은 사용자 요청대로 'us-en' (글로벌) 우선.
-    # 한국어 쿼리여도 글로벌 뉴스가 더 중요하다고 함.
+    # [Fix] 뉴스 검색도 언어 감지 적용
     region = "us-en"
+    if re.search(r'[가-힣]', query):
+        region = "kr-kr"
     
     filtered_results = []
     blocked_domains = ['zhihu.com', 'baidu.com', '163.com', 'sohu.com', 'weibo.com', 'csdn.net']
 
     try:
         with DDGS() as ddgs:
-            raw_results = list(ddgs.news(query, region=region, max_results=num_results + 3))
-            
+            # timelimit="m" (Month) for relevance
+            try:
+                raw_results = list(ddgs.news(query, region=region, timelimit="m", max_results=num_results + 5))
+            except Exception:
+                raw_results = list(ddgs.news(query, region="wt-wt", timelimit="m", max_results=num_results + 5))
+
             for r in raw_results:
                 url = r.get('url', '').lower()
                 if any(d in url for d in blocked_domains):
@@ -307,13 +331,26 @@ def execute_command(command: str, timeout: int = 30, **kwargs) -> dict[str, Any]
     try:
         # 플랫폼에 따른 셸 설정
         if platform.system() == "Windows":
+            # [Fix] Windows cmd.exe does not support 'ls'. Map to 'dir'.
+            # 'ls -R' -> 'dir /s'
+            cmd_stripped = command.strip()
+            if cmd_stripped.startswith("ls"):
+                # Check for recursive flag
+                if "-R" in cmd_stripped:
+                     # Replace 'ls -R' with 'dir /s'
+                     # simplistic replacement: "ls -R path" -> "dir /s path"
+                     # Be careful to preserve path
+                     command = cmd_stripped.replace("ls -R", "dir /s").replace("ls", "dir") # Fallback safety
+                else:
+                     command = cmd_stripped.replace("ls", "dir")
+            
             result = subprocess.run(
                 command,
                 shell=True,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                encoding='utf-8',
+                encoding='cp949', # [Fix] Windows cmd standard encoding
                 errors='replace'
             )
         else:

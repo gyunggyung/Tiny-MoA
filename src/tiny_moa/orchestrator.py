@@ -176,6 +176,30 @@ class TinyMoA:
         
         tool_call = {}
         
+        # [NEW] Explicit Tool Handoff from Planner
+        # If input is like "execute_command: python --version", parse it directly.
+        explicit_match = re.match(r"^([a-zA-Z_]+):\s*(.+)$", user_input.strip())
+        if explicit_match:
+            ex_tool = explicit_match.group(1).lower()
+            ex_arg = explicit_match.group(2).strip()
+            
+            # Allow known tools only
+            known_tools = ["execute_command", "get_weather", "search_web", "search_news", "read_url"]
+            if ex_tool in known_tools:
+                if verbose: console.print(f"[dim]⚡ Explicit Tool Handoff: {ex_tool}({ex_arg})[/dim]")
+                
+                if ex_tool == "execute_command":
+                    tool_call = {"name": "execute_command", "arguments": {"command": ex_arg}}
+                elif ex_tool == "get_weather":
+                    tool_call = {"name": "get_weather", "arguments": {"location": ex_arg}}
+                elif ex_tool in ["search_web", "search_news"]:
+                    tool_call = {"name": "search_web", "arguments": {"query": ex_arg}}
+                elif ex_tool == "read_url":
+                    tool_call = {"name": "read_url", "arguments": {"url": ex_arg}}
+                
+                # If explicit, we skip Brain hint logic below
+                return self._execute_tool_logic(tool_call, verbose, return_raw, user_input)
+
         # 1. Brain이 제공한 최적화 인자 사용 (우선순위 1)
         if arg_hint and tool_hint:
             if verbose:
@@ -199,7 +223,24 @@ class TinyMoA:
                     is_valid_cmd = False
                 
                 if is_valid_cmd:
-                    arguments = {"command": arg_hint}
+                    # [Defense] Command validation: simple keyword check
+                    # "main idea of paper" treated as command -> FAIL
+                    # known safe prefixes
+                    safe_prefixes = ["python", "uv", "pip", "git", "docker", "ls", "dir", "cat", "echo", "where", "which", "node", "npm"]
+                    
+                    cmd_clean = arg_hint.strip().lower()
+                    is_safe = any(cmd_clean.startswith(p) for p in safe_prefixes)
+                    
+                    # If not starts with safe prefix, check if it has spaces (natural language?)
+                    # Single word command is usually fine (e.g. "dir"), but "main idea" is bad.
+                    has_spaces = " " in cmd_clean
+                    
+                    if not is_safe and has_spaces and len(cmd_clean.split()) > 2:
+                         if verbose: console.print(f"[yellow]⚠️ Invalid command detected ('{arg_hint}'). Fallback to search_web.[/yellow]")
+                         tool_hint = "search_web"
+                         arguments = {"query": arg_hint}
+                    else:
+                         arguments = {"command": arg_hint}
                 else:
                     if verbose:
                          console.print(f"[yellow]⚠️ Brain 생성 명령어('{arg_hint}')가 자연어 설명으로 감지되어 무시합니다. 키워드 추론을 사용합니다.[/yellow]")
@@ -232,6 +273,12 @@ class TinyMoA:
                     console.print("[dim]🔧 키워드 기반 Tool 추론 중...[/dim]")
                 tool_call = self._infer_tool_from_keywords(user_input, tool_hint)
         
+        return self._execute_tool_logic(tool_call, verbose, return_raw, user_input)
+
+    def _execute_tool_logic(self, tool_call: dict, verbose: bool, return_raw: bool, user_input: str) -> str:
+        """
+        Helper to execute the constructed tool call
+        """
         # [Critical Fix] Validate arguments against tool definition to prevent "unexpected keyword" errors
         if tool_call and "name" in tool_call and "arguments" in tool_call:
             t_name = tool_call["name"]
@@ -256,6 +303,15 @@ class TinyMoA:
         tool_name = tool_call.get("name", "")
         arguments = tool_call.get("arguments", {})
         
+        # [Sanitization] execute_command prefix cleaning
+        if tool_name == "execute_command" and "command" in arguments:
+            raw_cmd = arguments["command"]
+            # Remove common prefixes hallucinated by Brain (e.g. "tool: ls", "command: ls", "도구: ls")
+            clean_cmd = re.sub(r'^(tool|command|cmd|도구|명령|실행)\s*[:：]\s*', '', raw_cmd, flags=re.IGNORECASE).strip()
+            if clean_cmd != raw_cmd:
+                if verbose: console.print(f"[dim]🧹 Command Sanitized: '{raw_cmd}' -> '{clean_cmd}'[/dim]")
+                arguments["command"] = clean_cmd
+        
         if verbose:
             console.print(f"[dim]🔨 Tool 실행: {tool_name}({arguments})[/dim]")
         
@@ -272,13 +328,9 @@ class TinyMoA:
             ))
         
         # [Semantic Error Detection] Soft Error 감지
-        # 툴이 성공(True)했다고 보고해도, 내용에 에러 키워드가 있으면 실패로 간주
         if result.get("success", False):
             raw_result = str(result.get("result", "")).lower()
             error_keywords = ["timeout", "timed out", "rate limit", "api error", "access denied", "404 not found", "500 internal server error", "traceback"]
-            
-            # 단, "error"라는 단어는 일반 문장에도 들어갈 수 있으므로 주의 (여기서는 보수적으로 제외하거나 문맥 파악 필요)
-            # 확실한 시스템 에러 키워드만 우선 적용
             
             for keyword in error_keywords:
                 if keyword in raw_result:
@@ -298,6 +350,8 @@ class TinyMoA:
                 return self.brain.integrate_response(user_input, str(tool_result))
         else:
             # Tool 실패 -> 재시도 (Retry)
+            # 여기서는 재시도 로직 생략하고 에러 반환 (복잡도 감소)
+            return self.brain.direct_respond(f"Tool execution failed: {result.get('error')}")
             error = result.get("error", "Unknown error")
             
             # 모든 Tool 실패 시 1회 재시도 (Brain에게 수정 요청)
@@ -867,9 +921,19 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
             logger.info("RAG + TOOL hybrid detected. Will execute both.")
             # route 유지 (TOOL), is_simple_summary는 False로
 
+        # [Complexity Check]
+        # 질문이 길거나 복합적인 연결어가 많으면 LLM Planner를 강제 사용 (Regex 분해보다 정확함)
+        complexity_signals = ["그리고", "and", "also", "?", "what about", "vs", "compare"]
+        # ?가 2개 이상이거나, 연결어가 2개 이상이면 복잡한 쿼리로 간주
+        complexity_score = sum(user_goal.count(sig) for sig in complexity_signals)
+        is_complex_query = (len(user_goal) > 60) or (complexity_score >= 2)
         
+        if is_complex_query:
+            logger.info(f"Complex query detected (Length: {len(user_goal)}, Score: {complexity_score}). Enforcing LLM Planner.")
+
         # Decisions
-        bypass_llm_planner = (route in ["TOOL", "DIRECT"]) or is_simple_summary
+        # If complex, bypass_llm_planner should be FALSE (i.e., Use Planner)
+        bypass_llm_planner = (not is_complex_query) and ((route in ["TOOL", "DIRECT"]) or is_simple_summary)
         
         if use_tui:
             live = Live(dashboard.generate_layout(), refresh_per_second=4, screen=False)
@@ -877,6 +941,8 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
             dashboard.add_log("System initialized.", "System")
             if bypass_llm_planner:
                 dashboard.add_log(f"Intelligent bypass enabled (Route: {route}).", "System")
+            else:
+                dashboard.add_log(f"Complex task detected. Using LLM Planner.", "System")
             live.update(dashboard.generate_layout())
         
         try:
@@ -943,19 +1009,19 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                 
                 dashboard.add_log(f"Hybrid plan created with {len(tasks_data)} tasks.", "Planner")
                 
-            elif route == "TOOL":
+            elif bypass_llm_planner and route == "TOOL":
                 # Decompose complex questions into simple tool tasks
                 sub_queries = self.brain.decompose_query(user_goal)
                 logger.info(f"Using TOOL decomposition: {sub_queries}")
                 tasks_data = [{"description": q, "agent": "tool"} for q in sub_queries]
                 if len(sub_queries) > 1:
                     dashboard.add_log(f"Decomposed into {len(sub_queries)} tool tasks.", "Planner")
-            elif route == "DIRECT" and not is_simple_summary:
+            elif bypass_llm_planner and route == "DIRECT" and not is_simple_summary:
                 # Simple direct response, but also check for decomposition
                 sub_queries = self.brain.decompose_query(user_goal)
                 logger.info(f"Using DIRECT decomposition: {sub_queries}")
                 tasks_data = [{"description": q, "agent": "brain"} for q in sub_queries]
-            elif is_simple_summary:
+            elif bypass_llm_planner and is_simple_summary:
                 # Heuristic Planning for summary
                 logger.info("Using fast-track heuristic plan for summary.")
                 

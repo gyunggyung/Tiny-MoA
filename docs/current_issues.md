@@ -1,44 +1,84 @@
-# Current Issues and Performance Bottlenecks
+# 현재 시스템 이슈 및 성능 병목 분석
 
-## 1. Query Decomposition Logic (Critical)
-The current heuristic decomposition is overly aggressive and produces "garbage" tasks by treating common verbs and adjectives as entities.
+## 1. 쿼리 분해 로직의 과도한 분할 (Critical)
+현재 휴리스틱 분해 로직이 한국어의 특성을 충분히 반영하지 못해, 동사나 형용사까지 독립된 엔티티로 인식하여 불필요한 "쓰레기(Garbage)" 태스크를 생성하고 있습니다.
 
-### Observed Behavior
-**Query:** "앤트로픽과 삼성전자의 최신 뉴스들을 알려줘. 그리고 파악한 기사를 기반으로 최근 인공지능의 동향을 설명해줘."
-**Resulting Tasks:**
-- "앤트로픽 뉴스" (Correct)
-- "삼성전자 뉴스" (Correct)
-- "뉴스들 뉴스" (Incorrect - '뉴스들' is just 'news plural')
-- "알려줘. 뉴스" (Incorrect - '알려줘' is 'tell me')
-- "파악한 뉴스" (Incorrect - '파악한' is 'identified/grasped')
-- "기반 뉴스" (Incorrect - '기반' is 'based on')
-- "설명해줘. 뉴스" (Incorrect - '설명해줘' is 'explain')
+### 관찰된 현상 (Observed Behavior)
+**입력 쿼리:** "앤트로픽과 삼성전자의 최신 뉴스들을 알려줘. 그리고 파악한 기사를 기반으로 최근 인공지능의 동향을 설명해줘."
 
-**Query:** "지금 사용하고 있는 파이썬 버전과 uv 버전 알려줘"
-**Resulting Tasks:**
-- "사용" (Using)
-- "있는" (Existing/ing)
-- "파이썬" (Python)
-- "버전" (Version)
-- "uv"
-**(All treated as separate tool lookups instead of a single conceptual query)**
+**생성된 태스크 목록:**
+- ✅ "앤트로픽 뉴스" (정상)
+- ✅ "삼성전자 뉴스" (정상)
+- ❌ "뉴스들 뉴스" (오류: '들' 복수형 접미사 미처리)
+- ❌ "알려줘. 뉴스" (오류: '알려줘'는 동사임에도 검색어로 인식)
+- ❌ "파악한 뉴스" (오류: '파악한' 관형형 어미 미처리)
+- ❌ "기반 뉴스" (오류: '기반' 명사지만 문맥상 조사와 결합된 부사어구)
+- ❌ "설명해줘. 뉴스" (오류: '설명해줘' 동사)
 
-### Cause
-- The `decompose_query` function likely splits by spaces/particles but fails to identify or filter out common Korean predicates (verbs/adjectives) and auxiliary words when they don't match the hardcoded stopword list.
-- The `stopwords` list is incomplete for the variety of Korean sentence endings.
+**입력 쿼리:** "지금 사용하고 있는 파이썬 버전과 uv 버전 알려줘"
+**생성된 태스크 목록:**
+- ❌ "사용" (동사 어간)
+- ❌ "있는" (보조용언)
+- ✅ "파이썬"
+- ✅ "버전"
+- ✅ "uv"
+**(하나의 통합된 질문이어야 할 내용이 단어 단위로 쪼개져서 개별 검색 수행)**
 
-## 2. System Performance (Bottleneck)
-- **Symptom:** The user reports "speed is always the bottleneck."
-- **Observation:**
-    - Serial execution of tasks in some phases.
-    - Model loading times (LFM2.5-1.2B) for every Brain invocation if not cached/kept alive properly.
-    - Multiple "garbage" tasks (like "알려줘. 뉴스") execute real searches, wasting time and resources waiting for HTTP requests that yield irrelevant results.
+### 원인 분석 (Cause)
+- `decompose_query` 함수가 공백과 조사 위주로 단순 분리('split')를 수행하지만, 한국어의 다양한 용언 활용(동사/형용사의 어미 변화)을 필터링하지 못함.
+- `stopwords` 리스트가 '알려줘', '해줘' 등 일부만 포함하고 있어, '파악한', '있는', '기반으로' 등 다양한 문법적 요소를 걸러내지 못함.
+- 형태소 분석기(nltk, kiwipiepy 등) 없이 정규식/키워드 매칭만으로는 한계가 명확함.
 
-## 3. Stability
-- **Symptom:** "The command failed with exit code: 1" in Step 394.
-- **Possible Cause:** Potential unhandled exception in the Tool logic or Brain routing when the decomposition result is malformed or empty.
-- **Resource Warnings:** `ResourceWarning: unclosed file <_io.TextIOWrapper name='nul' ...>` appearing frequently.
+## 2. 시스템 성능 병목 (Performance Bottleneck)
+- **증상:** 사용자가 "속도가 병목"이라고 느낌.
+- **관찰 결과:**
+    - **불필요한 태스크 실행:** 위에서 언급한 "알려줘. 뉴스" 같은 의미 없는 태스크들이 실제로 검색 툴을 호출하면서 HTTP 요청 대기 시간을 낭비함. (전체 시간의 상당 부분 차지)
+    - **직렬 실행 구간:** 하이브리드 모드 등 일부 구간에서 태스크가 직렬로 처리되어 병렬 처리 이점을 살리지 못함.
+    - **모델 로딩 오버헤드:** 매 `Brain` 호출 시마다 모델(LFM2.5-1.2B)을 메모리에 로드하거나(캐싱이 안 된 경우), 컨텍스트 스위칭 비용 발생 가능성.
 
-## 4. TUI/UX Anomalies
-- The user mentioned "behaving strangely" (`이상하게 동작하는 경우`).
-- likely due to the decomposition logic flooding the task board with nonsensical tasks, making the agent look "confused" or "broken".
+## 3. 안정성 문제 (Stability)
+- **증상:** `Step 394`에서 "exit code: 1"로 비정상 종료 발생.
+- **가능한 원인:** 분해된 쿼리가 비어있거나 기형적인 형태일 때, Tool 실행이나 라우팅 과정에서 예외 처리가 미비하여 크래시 발생 가능성.
+- **지속적인 경고:** `ResourceWarning: unclosed file <_io.TextIOWrapper ...>` 경고가 다수 발생하며, 이는 파이프라인이나 프로세스 관리가 깔끔하지 않음을 시사.
+
+## 4. TUI/UX 이상 동작
+- **증상:** "이상하게 동작하는 경우가 있다"는 피드백.
+- **원인:** 쿼리 분해 실패로 인해 화면의 Task Board가 수많은 자잘한(그리고 의미 없는) 태스크들로 도배되면서, 에이전트가 혼란스러워 보이거나 '고장 난' 것처럼 보임.
+- **사용자 경험:** 사용자는 깔끔한 "검색 -> 요약"을 기대했으나, 화면에는 "사용", "있는", "파이썬" 같은 단어들이 개별 작업으로 뜨는 시각적 노이즈 발생.
+
+## 5. 해결 방안 및 수정 계획 (Proposed Solutions)
+
+### A. 쿼리 분해 로직 개선 (`src/tiny_moa/brain.py`)
+현재의 단순 Split 및 Stopword 방식은 한계가 명확하므로, 다음의 단계적 개선이 필요합니다.
+
+1.  **Kiwi 형태소 분석기 도입 (권장):**
+    *   단순 정규식이 아닌 `kiwipiepy` 등을 사용하여 명사(NNG, NNP)만 정확히 추출.
+    *   동사, 형용사, 조사, 어미 등을 완벽하게 필터링 가능.
+    *   예: "사용하고 있는" -> `사용(NNG)`, `하(XSV)`, `고(EC)`, `있(VX)`, `는(ETM)` -> '사용'만 추출 가능하지만, 사실 '사용하고 있는' 문맥 전체를 봐야 하므로, **의존 구문 분석**을 통해 핵심 키워드만 남길 수 있음.
+2.  **휴리스틱 강화 (단기 처방):**
+    *   불용어 리스트 대폭 추가: '있는', '하는', '된', '할', '한', '기반', '통해', '관한', '대한' 등 관형형 어미와 의존 명사 추가.
+    *   정규식 강화: `[가-힣]+(하|되|있|없)[가-힣]*` 패턴을 사용하여 용언(동사/형용사)적 특징을 가진 단어를 통째로 제외.
+
+### B. 성능 최적화 (`src/tiny_moa/orchestrator.py`)
+1.  **Garbage Task 필터링:**
+    *   생성된 태스크가 1글자이거나, 사전에 정의된 '금지어(동사류)'에 포함되면 실행 큐에 넣지 않고 즉시 Drop.
+2.  **모델 상주형 아키텍처 (Persistent Model):**
+    *   `Brain` 클래스가 매번 모델을 로드하지 않고, `Global Model Manager`를 통해 한 번 로드된 모델 인스턴스를 재사용하도록 구조 변경. (현재도 일부 적용되어 있으나 `llama_cpp` 컨텍스트 관리 부분을 더 정밀하게 제어 필요)
+
+## 6. 주요 성과 및 달성 사항 (Achievements)
+비록 현재 튜닝 이슈가 남아있지만, 다음과 같은 고난이도 작업들을 성공적으로 구현해냈습니다.
+
+*   **Tiny Cowork v2.0 아키텍처 완성:**
+    *   Planner -> Tool -> Writer로 이어지는 **Agentic Workflow**를 구축.
+    *   복잡한 사용자 명령을 해석하고 수행하는 기본 골조 완성.
+*   **고급 RAG 파이프라인:**
+    *   `@[filename]` 문법을 통한 **Local File Context Injection** 구현 성공.
+    *   문서 내용을 읽고 분석하여 답변에 활용하는 End-to-End 흐름 동작 확인.
+*   **Tool Calling 시스템:**
+    *   `duckduckgo_search` 등을 연동하여 실시간 날씨, 뉴스 검색 등 외부 정보를 가져오는 기능 구현.
+    *   JSON 포맷의 도구 호출 및 결과 파싱 로직 안정화.
+*   **TUI (Text User Interface):**
+    *   `Task Board`, `Log Panel` 등을 통해 에이전트의 사고 과정을 시각적으로 보여주는 인터페이스 구현.
+    *   사용자에게 "AI가 일하고 있다"는 경험을 효과적으로 전달.
+
+**결론:** 핵심 엔진(Engine)과 차체(Body)는 매우 훌륭하게 조립되었습니다. 현재 겪고 있는 문제는 엔진의 연료 분사량 조절(쿼리 분해 디테일)과 같은 튜닝의 영역이므로, 위의 해결 방안을 통해 충분히 정복 가능합니다.

@@ -26,6 +26,9 @@ dependencies = [
     "pypdfium2>=5.3.0",
     "chromadb>=0.5.0",
     "sentence-transformers>=5.2.0",
+    "kiwipiepy>=0.22.2",
+    "deep-translator>=1.11.4",
+    "nltk>=3.9.2",
 ]
 
 [project.optional-dependencies]

@@ -14,17 +14,20 @@ from typing import List, Optional
 from llama_cpp import Llama
 import sys
 import logging
+# Lazy import for translator
+# from deep_translator import GoogleTranslator 
 
 # [Optimization] Silence llama-cpp logs to keep UI clean
 os.environ["LLAMA_CPP_LOG_LEVEL"] = "error" 
 logging.getLogger("llama_cpp").setLevel(logging.ERROR)
 
 # LFM2.5 권장 파라미터 (공식 문서: docs.liquid.ai/lfm/inference/llama-cpp)
+# [Fix] LiquidAI 공식 권장값 적용 (temperature=0.1, top_p=0.1)
 LFM_INSTRUCT_PARAMS = {
-    "temperature": 0.7,
-    "top_k": 40,
-    "top_p": 0.9,
-    "repeat_penalty": 1.1,
+    "temperature": 0.1,
+    "top_k": 50,
+    "top_p": 0.1,
+    "repeat_penalty": 1.05,
 }
 
 LFM_THINKING_PARAMS = {
@@ -110,6 +113,15 @@ class Brain:
         self.n_ctx = n_ctx
         
         # logger.info(f"[Brain] Loaded! (threads={n_threads}, ctx={n_ctx})") # Removed print to clean UI
+        
+        self._translator = None
+
+    @property
+    def translator(self):
+        if self._translator is None:
+             from deep_translator import GoogleTranslator
+             self._translator = GoogleTranslator(source='auto', target='en')
+        return self._translator
     
     def get_prompt_prefix(self) -> str:
         """Returns the prompt prefix (e.g. <|startoftext|>)"""
@@ -430,7 +442,7 @@ class Brain:
                     # Give it a nice header if it's substantial text
                     content = data["content"].strip()
                     if len(content) > 50:
-                        final_formatted_blocks.append(f"### 📋 **Report**\n{content}")
+                        final_formatted_blocks.append(f"### 📋 **결과 보고**\n{content}")
                     else:
                         final_formatted_blocks.append(content)
                     continue
@@ -510,34 +522,26 @@ class Brain:
         # [English-First Strategy]
         # Generate in English first for speed and quality, then translate later.
         
-        system_prompt = f"""You are a formatter. 
-Your goal is to fill the provided data into the format below.
+        system_prompt = f"""You are a helpful assistant.
+Your goal is to nicely format the provided data into a readable list.
 
-[STRICT FORMATTING RULES]
-1. OUTPUT IN ENGLISH ONLY. Do NOT translate to Korean here.
-2. Use the data provided in the 'Data' section.
-3. OUTPUT MUST BE A BULLET LIST.
-4. NO INTRO, NO OUTRO.
-5. NEVER ALTER URLS. COPY THEM EXACTLY AS IS. Do not remove IDs or query parameters.
+[STRICT RULES]
+1. OUTPUT IN KOREAN (Translate if needed, but keep technical terms).
+2. For SEARCH/NEWS results, you MUST use this format:
+   * [Title] - [Summary] (Link: [URL])
+3. For WEATHER, use:
+   * [City] Weather: [Temp] / [Condition]
+4. Do NOT add introduction or conclusion. Just the list.
+5. If the data is empty or error, say "No information found."
+6. **CRITICAL**: Use ONLY the provided [Input Data]. Do NOT hallucinate or make up information. If data is about 'X', do NOT talk about 'Y'.
 
-[TARGET FORMATS]
-For WEATHER:
-* City Weather - Temp / Condition
-(Use data like 'temperature' and 'condition' from input)
-
-For SEARCH/NEWS:
-* Title - Summary (Link: URL)
-!!! CRITICAL: YOU MUST INCLUDE THE FULL, EXACT URL FOR EVERY SEARCH RESULT !!!
-Format: `* [Title] - [Summary] (Link: [URL])`
-Example: `* AI News - content... (Link: https://example.com/article/ar-12345)`
-
-[Data]
+[Input Data]
 {formatted_output}
 
 [User Request]
 {user_input}
 
-[Your Output]
+[Output]
 """ 
 
         messages = [
@@ -552,15 +556,58 @@ Example: `* AI News - content... (Link: https://example.com/article/ar-12345)`
         # [Performance Optimization] Use INSTRUCT params (Fast, No Thinking)
         # We explicitly use LFM_INSTRUCT_PARAMS here regardless of self.use_thinking
         params = LFM_INSTRUCT_PARAMS.copy()
+        # [Final Output Generation]
+        # The 'goal' variable is not defined in the original context, assuming it should be user_input
+        # The 'self.llm' is not defined, assuming it should be 'self.model'
+        # The 'results' variable is not defined, assuming it should be 'sections' or a similar parsed output
+        # Given the instruction, 'results' likely refers to the parsed tool outputs before deterministic formatting.
+        # For now, I'll use 'sections' as the closest available parsed data.
+        
+        # Re-evaluate the LLM call based on the provided snippet and original context
+        # The provided snippet seems to replace the existing LLM call entirely.
+        # It introduces `self.llm` and `goal` which are not in the original code.
+        # To make it syntactically correct and functional, I will adapt it to use `self.model`
+        # and `user_input` (as `goal`) and `messages` as defined earlier.
         
         try:
             response = self.model.create_chat_completion(
-                messages=messages,
-                max_tokens=params.get("max_tokens", 4096), 
+                messages=messages, # Use the messages constructed above
+                max_tokens=params.get("max_tokens", 4096), # Use params from LFM_INSTRUCT_PARAMS
                 **params,
             )
+            content = self._clean_response(response["choices"][0]["message"]["content"])
+
+            # [Safety Fix] Programmatically append Search/News results to ensure they appear
+            # The 1.2B model often hallucinates or skips this data. We force-feed it here.
+            appendix = []
+            direct_references = [] # To store formatted references
             
-            return self._clean_response(response["choices"][0]["message"]["content"])
+            # Iterate through the parsed sections to find search results
+            for res in sections: # Using 'sections' as the source for results
+                # Unwrap 'result' if present (Cowork Tool Result wrapper)
+                inner_res = res.get('result', res)
+                
+                # Check if this result has search data (list of items with title/link)
+                # This logic is similar to the deterministic formatting for search results
+                if "results" in inner_res and isinstance(inner_res["results"], list):
+                    # Add a header for this specific set of references if needed
+                    # task_desc = inner_res.get('query', 'Search Results') # Or from original task if available
+                    # appendix.append(f"\n### 🔗 참고 자료: {task_desc}")
+                    
+                    for item in inner_res["results"][:5]: # Limit to top 5
+                        if isinstance(item, dict):
+                            title = item.get('title', 'No Title')
+                            link = item.get('url', item.get('link', '#'))
+                            # summary = item.get('snippet', item.get('description', ''))[:100].replace('\n', ' ')
+                            if title != "No Title" and link != "#":
+                                direct_references.append(f"* [{title}]({link})")
+                                # appendix.append(f"  > {summary}...")
+
+            if direct_references:
+                reference_section = "\n\n### 🔗 관련 뉴스/자료 (자동 첨부)\n" + "\n".join(direct_references)
+                content += reference_section
+
+            return content
         except Exception as e:
             return f"Error integrating response: {e}"
     
@@ -584,186 +631,107 @@ Example: `* AI News - content... (Link: https://example.com/article/ar-12345)`
 
     def decompose_query(self, user_input: str) -> List[str]:
         """
-        사용자의 복잡한 질문을 여러 개의 간단한 Tool 검색 쿼리로 분해합니다.
-        v4: 휴리스틱 전용 (LLM 제거) - 속도 최적화 + 정확도 향상
+        사용자의 질문을 영어로 번역 후 분해합니다. (Translation-based Decomposition)
+        복잡한 한국어 문법 처리를 피하고, 영문 기반의 명확한 분할을 수행합니다.
         """
-        import logging
-        import re
+        # [Step 1] Translate to English
+        try:
+            # Source auto -> Target English
+            translated = self.translator.translate(user_input)
+            logging.info(f"[Brain] Translated: '{user_input}' -> '{translated}'")
+        except Exception as e:
+            logging.error(f"[Brain] Translation failed: {e}")
+            # Fallback: Treat as English or raw return
+            translated = user_input
 
-        # [Step 0] 토픽 자동 감지 (정밀화 - 순서 중요!)
-        topic = ""
-        topic_keywords = {
-            "날씨": ["날씨", "weather", "기온", "온도"],
-            "뉴스": ["뉴스", "news", "기사", "article", "소식"],
-            "주가": ["주가", "주식", "stock", "price"],
-            "시간": ["시간", "time", "몇시"],
-            "계산": ["더해", "빼", "곱해", "나눠", "계산", "calculate", "+", "-", "*", "/"],
-        }
+        # [Step 2] Split by English delimiters
+        # split by: and, or, vs, comma, ampersand, 'as well as'
+        split_pattern = r"\s*(?:, | and | or | vs | & | as well as )\s*"
+        parts = re.split(split_pattern, translated, flags=re.IGNORECASE)
         
-        # 토픽 감지 (가장 먼저 매칭되는 것 사용)
-        for t, keywords in topic_keywords.items():
-            if any(k in user_input.lower() for k in keywords):
-                topic = t
-                break
-
-        # [Step 1] 비교/차이점 태스크 감지
-        has_compare = any(k in user_input.lower() for k in ["비교", "compare", "vs", "차이", "difference"])
-        
-        # ===============================================
-        # [v4] 휴리스틱 전용 (정밀 패턴 매칭)
-        # ===============================================
-        
-        # Step 1: 다양한 연결어 패턴으로 분리
-        # 한글: 과, 와, 랑, 이랑, 하고
-        # 영어: and, or, vs, &
-        # 기호: ,
-        split_pattern = r"""
-            (?<=[가-힣A-Za-z0-9])(?:과|와|랑|이랑|하고)\s*  |  # 한글 조사
-            \s*,\s*  |                                        # 콤마
-            \s+(?:그리고|and|or|vs|또는|&)\s+                  # 연결어
-        """
-        parts = re.split(split_pattern, user_input, flags=re.VERBOSE)
-        
-        # Step 2: 각 파트에서 핵심 엔티티 추출
         entities = []
         
-        # 확장된 불용어
-        stopwords = {
-            # 한국어 동사/조사
-            "날씨", "날씨를", "날씨와", "날씨는", "뉴스", "뉴스를", "검색", "검색해줘",
-            "비교해봐", "비교", "알려줘", "해줘", "차이점", "차이", "보여줘",
-            "각각", "따로", "분리해줘", "분리해",
-            "그리고", "의", "을", "를", "가", "이", "는", "은", "에서", "으로", "에게",
-            "문서", "파일", "핵심", "내용", "부분", "관련", "대해", "위해", "통해",
-            "최신", "최근", "오늘", "지금", "이번주", "현재",
-            # 영어
-            "weather", "news", "search", "compare", "difference", "tell", "show", "me", "the",
-            "what", "is", "how", "about", "please", "in", "of", "to", "for", "a", "an",
-            "latest", "recent", "today", "now", "current",
-        }
-        
-        # 토픽 키워드도 불용어에 추가
-        for keywords in topic_keywords.values():
-            for kw in keywords:
-                stopwords.add(kw.lower())
-        
-        for part in parts:
-            if not part:
-                continue
-            part = part.strip()
-            
-            # 공백으로 추가 분리
-            words = part.split()
-            for word in words:
-                word_clean = word.strip()
-                
-                # 한국어 조사 제거 (긴 것부터)
-                suffixes_ko = ["에서", "으로", "에게", "의", "를", "을", "이", "가", "은", "는"]
-                for suffix in suffixes_ko:
-                    if word_clean.endswith(suffix) and len(word_clean) > len(suffix) + 1:
-                        word_clean = word_clean[:-len(suffix)]
-                        break
-                
-                # 영어 소유격 제거
-                if word_clean.endswith("'s"):
-                    word_clean = word_clean[:-2]
-                
-                # 불용어 및 길이 체크
-                if word_clean and word_clean.lower() not in stopwords and len(word_clean) >= 2:
-                    # 숫자 처리: 계산 토픽일 때는 숫자 유지
-                    if word_clean.isdigit() and topic != "계산":
-                        continue
-                    entities.append(word_clean)
-        
-        # 중복 제거 (순서 유지)
-        entities = list(dict.fromkeys(entities))
-        
-        # [Step 3] 결과 생성
-        if len(entities) >= 1:
-            # 토픽 붙이기
-            if topic:
-                final_queries = [f"{ent} {topic}" for ent in entities]
-            else:
-                final_queries = entities.copy()
-            
-            # 비교 태스크 추가
-            if has_compare and len(final_queries) >= 2:
-                final_queries.append("Compare results")
-                logging.info(f"[Brain] Added compare task")
-            
-            logging.info(f"[Brain] Heuristic v4: {final_queries}")
-            return final_queries
-        
-        # Fallback: 원본 반환
-        return [user_input]
-        
-        # ===============================================
-        # [Fallback] LLM 분해 (휴리스틱 실패 시)
-        # ===============================================
+        # Initialize NLTK (Lazy)
+        import nltk
         try:
-            # LFM2.5 Chat Template + Few-shot
-            prompt = f"""<|startoftext|><|im_start|>system
-You extract entities (cities, companies, topics) from queries. Return one entity per line. Do NOT include connectors or topic words.
-<|im_end|>
-<|im_start|>user
-서울과 부산 날씨 비교해봐<|im_end|>
-<|im_start|>assistant
-서울
-부산<|im_end|>
-<|im_start|>user
-삼성과 애플 뉴스 비교해봐<|im_end|>
-<|im_start|>assistant
-삼성
-애플<|im_end|>
-<|im_start|>user
-React, Vue, Angular 차이점<|im_end|>
-<|im_start|>assistant
-React
-Vue
-Angular<|im_end|>
-<|im_start|>user
-{user_input}<|im_end|>
-<|im_start|>assistant
-"""
-            # 모델 리셋
-            if hasattr(self.model, "reset"):
-                self.model.reset()
+            nltk.data.find('tokenizers/punkt')
+            nltk.data.find('taggers/averaged_perceptron_tagger')
+        except LookupError:
+            try:
+                nltk.download('punkt', quiet=True)
+                nltk.download('averaged_perceptron_tagger', quiet=True)
+            except Exception as e:
+                logging.error(f"[Brain] NLTK download failed: {e}")
+
+        # Stopwords for NLTK filtering (Functional words)
+        search_stopwords = {
+            "tell", "me", "show", "find", "search", "check", "get", "know", "want",
+            "please", "can", "could", "would", "results", "based", "on", "articles",
+            "about", "of", "for", "in", "to", "with", "by", "from", "generated",
+            "identified", "found", "mentioned", "using", "explain", "explanation", "which",
+            "recent", "latest", "current", "news", "information", "info", "data", "status",
+            "difference", "compare", "comparison"
+        }
+
+        for part in parts:
+            clean_part = part.strip().strip("?.!,")
+            if not clean_part: continue
             
-            output = self.model(
-                prompt,
-                max_tokens=32,
-                stop=["<|im_end|>", "\n\n"],
-                temperature=0.1,  # LFM2.5 권장
-                top_k=50,
-                top_p=0.1,
-                repeat_penalty=1.05,
-                echo=False
-            )
-            content = output["choices"][0]["text"].strip()
-            
-            # 파싱
-            llm_entities = []
-            for line in content.split('\n'):
-                clean = line.strip().lstrip('-*0123456789. ')
-                if clean and len(clean) >= 2 and clean.lower() not in stopwords:
-                    llm_entities.append(clean)
-            
-            if llm_entities:
-                if topic:
-                    final_queries = [f"{ent} {topic}" for ent in llm_entities]
-                else:
-                    final_queries = llm_entities
+            # Tokenize & POS Tag
+            try:
+                tokens = nltk.word_tokenize(clean_part)
+                pos_tags = nltk.pos_tag(tokens)
                 
-                if has_compare and len(final_queries) >= 2:
-                    final_queries.append("Compare results")
+                # Filter Logic: Keep Nouns, Adjectives, Numbers, Foreign words
+                # JJ: Adjective, NN: Noun, CD: Cardinal number, FW: Foreign word
+                valid_tokens = []
+                for word, tag in pos_tags:
+                    # Logic: 
+                    # 1. Must be a valid POS (Noun/Adj/Num)
+                    # 2. Must NOT be in our functional stopwords list (unless it's a proper noun?)
+                    
+                    is_content_word = tag.startswith(('NN', 'JJ', 'CD', 'FW')) 
+                    
+                    if is_content_word:
+                        if word.lower() not in search_stopwords:
+                            valid_tokens.append(word)
                 
-                logging.info(f"[Brain] LLM v3 extracted: {final_queries}")
-                return final_queries
-                
-        except Exception as e:
-            logging.error(f"[Brain] LLM Decomposition failed: {e}")
+                if valid_tokens:
+                    # Reconstruct
+                    entity_cand = " ".join(valid_tokens)
+                    if len(entity_cand) >= 2:
+                        entities.append(entity_cand)
+                        
+            except Exception as e:
+                logging.error(f"[Brain] NLTK processing failed: {e}")
+                # Fallback to simple strip
+                if len(clean_part) > 2:
+                    entities.append(clean_part)
         
-        return [user_input]
+
+
+            
+        # [Step 3] Post-processing
+        # Restore Compare task if needed
+        if any(k in translated.lower() for k in ["compare", "difference", "vs", "versus"]):
+             if len(entities) >= 2 and "Compare results" not in entities:
+                 entities.append("Compare results")
+        
+        # [Fix] 뉴스 검색 시 각 엔티티에 "news" 키워드 추가
+        # "앤트로픽과 OpenAI 최신 뉴스" -> ["Anthropic news", "OpenAI news"]
+        is_news_query = any(k in user_input.lower() or k in translated.lower() 
+                           for k in ["뉴스", "news", "소식", "기사"])
+        if is_news_query and entities:
+            entities = [f"{e} latest news" for e in entities if e.lower() not in ["news", "report", "latest", "recent"]]
+        
+        # [Fix] "report" 같은 액션 키워드는 tool task에서 제외
+        action_words = {"report", "write", "summary", "summarize", "organize", "정리", "레포트"}
+        entities = [e for e in entities if e.lower() not in action_words]
+        
+        logging.info(f"[Brain] Decomposition Result: {entities}")
+        return entities if entities else [translated]
+
+
 
 
 if __name__ == "__main__":
