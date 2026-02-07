@@ -141,10 +141,19 @@ class OfficeAgent:
                 
                 if content_text:
                     for paragraph in content_text.split('\n'):
-                        if paragraph.strip():
-                            p = doc.add_paragraph(paragraph.strip())
-                            for run in p.runs:
-                                self._apply_korean_font(run)
+                        paragraph = paragraph.strip()
+                        if not paragraph:
+                            continue
+                            
+                        # Bullet Point 처리 (- 또는 * 로 시작하는 경우)
+                        if paragraph.startswith("- ") or paragraph.startswith("* "):
+                            p = doc.add_paragraph(paragraph[2:].strip(), style='List Bullet')
+                        else:
+                            p = doc.add_paragraph(paragraph)
+                            
+                        # 폰트 적용 (스타일 적용 후에도 개별 런에 폰트 적용 필요)
+                        for run in p.runs:
+                            self._apply_korean_font(run)
             
             doc.save(full_path)
             return {

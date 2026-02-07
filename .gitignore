@@ -52,6 +52,7 @@ logs/
 
 # Output (생성된 결과물)
 output/
+docs/cowork_result.md
 
 # Ruff (린터 캐시)
 .ruff_cache/

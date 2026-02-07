@@ -9,6 +9,31 @@ import re
 import os
 from src.tiny_moa.cowork.workers.base import BaseWorker
 
+# [Gemini-Claw Style] Senior Consultant Persona
+OFFICE_SYSTEM_PROMPT = """You are an expert Business Consultant and Office Automation Specialist.
+Your goal is to create highly professional, detailed, and insightful documents for the user.
+
+[CORE PERSONA]
+- Act as a Senior Consultant from a top-tier firm (e.g., McKinsey, BCG).
+- Your output must be insightful, structured, and polished.
+- Avoid generic or shallow content. Provide specific details based on the context.
+
+[LANGUAGE RULES]
+- IF THE USER ASKS IN KOREAN, YOU MUST GENERATE CONTENT IN KOREAN.
+- Translate English context into Korean if necessary.
+- Use professional business terminology.
+
+[OUTPUT FORMAT]
+- You must output ONLY valid JSON.
+- Do not include markdown blocks (```json ... ```) or explanations.
+- The JSON structure must match the user's request exactly.
+
+[THINKING PROCESS]
+1. Analyze the Request and Context.
+2. Structure the document logically (Introduction -> Body -> Conclusion).
+3. Draft content with high detail density.
+4. Format as JSON.
+"""
 
 class OfficeWorker(BaseWorker):
     """Office 문서 생성 전문 Worker"""
@@ -33,8 +58,8 @@ class OfficeWorker(BaseWorker):
             if os.path.exists(readme_path):
                 with open(readme_path, "r", encoding="utf-8") as f:
                     readme_content = f.read()
-                    # 컨텍스트에 추가 (앞부분 3000자만 끊어서 넣음 - 토큰 제한 고려)
-                    context += f"\n\n[LOCAL PROJECT INFO (README.md)]\n{readme_content[:3000]}\n[END LOCAL INFO]\n"
+                    # 명확한 구분을 위해 헤더 추가
+                    context += f"\n\n### 📂 PROJECT CONTEXT (Source of Truth: README.md)\n{readme_content[:4000]}\n[End of README]\n"
                     self.logger.info(f"[{self.name}] Auto-loaded README.md into context")
         except Exception as e:
             self.logger.warning(f"[{self.name}] Failed to read README.md: {e}")
@@ -96,42 +121,79 @@ class OfficeWorker(BaseWorker):
                     return title_part
         return "Tiny-MoA 프로젝트"
     
-    def _generate_content_with_brain(self, prompt: str) -> str:
-        """Brain을 사용하여 내용 생성"""
+    def _generate_content_with_brain(self, user_prompt: str, system_prompt: str = OFFICE_SYSTEM_PROMPT) -> str:
+        """Brain을 사용하여 내용 생성 (System Prompt 분리)"""
         try:
             if hasattr(self.orchestrator, '_brain') and self.orchestrator._brain:
-                response = self.orchestrator._brain.direct_respond(prompt)
+                # Brain.direct_respond에 system_prompt 전달
+                response = self.orchestrator._brain.direct_respond(user_prompt, system_prompt=system_prompt)
+                
+                # [DEBUG] Brain 응답 로그
+                self.logger.info(f"[{self.name}] Brain Response Length: {len(response) if response else 0}")
+                if response:
+                    self.logger.info(f"[{self.name}] Brain Response Preview: {response[:200]}...")
+                
                 if response and len(response) > 50:
                     return response
         except Exception as e:
             self.logger.warning(f"[{self.name}] Brain generation failed: {e}")
         return ""
-    
+
+    def _parse_json(self, content: str) -> dict:
+        """JSON 파싱 시도 (Markdown 블록 지원)"""
+        if not content:
+            return {}
+        try:
+            # 1. Markdown code block 파싱
+            code_block_match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", content)
+            if code_block_match:
+                return json.loads(code_block_match.group(1))
+            
+            # 2. 일반 JSON 파싱
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                return json.loads(json_match.group())
+        except json.JSONDecodeError as e:
+            self.logger.error(f"[{self.name}] JSON Decode Error: {e}")
+            # [DEBUG] 실패한 내용 일부 출력
+            self.logger.error(f"[{self.name}] Failed Content Preview: {content[:500]}")
+        except Exception as e:
+            self.logger.error(f"[{self.name}] Parse Error: {e}")
+            
+        return {}
+
     def _create_ppt(self, task_description: str, output_dir: str, context: str = "") -> dict:
         """PPT 생성"""
         title = self._get_title(task_description)
         
-        # Brain에게 슬라이드 내용 생성 요청 (Context 포함)
-        prompt = f"""You are a professional business consultant creating a PowerPoint presentation.
-Topic: {title}
+        # [Structured Prompt]
+        user_prompt = f"""
+[TASK]
+Create a professional PowerPoint presentation about: {title}
 
-Context Information (Use this to create content):
+[CONTEXT INFORMATION]
+The following information is available. Use it to populate the slides with factual details.
 {context}
 
-Generate a JSON object with 3-5 slides.
-Format:
+[FORMAT REQUIREMENTS]
+Generate a JSON object with 4-6 slides.
+Structure:
 {{
-    "title": "Presentation Title",
-    "subtitle": "Subtitle",
+    "title": "Professional Title",
+    "subtitle": "Insightful Subtitle",
     "slides": [
-        {{"title": "Slide 1 Title", "content": ["Point 1", "Point 2"]}},
-        {{"title": "Slide 2 Title", "content": ["Point A", "Point B"]}}
+        {{"title": "Slide Title", "content": ["Detailed bullet point 1", "Detailed bullet point 2", "Key statistic or fact"]}},
+        ...
     ]
 }}
 
-CRITICAL: Return ONLY valid JSON. No markdown, no explanations."""
+[IMPORTANT]
+- Content MUST be in Korean (if query was Korean).
+- Use bullet points for readability.
+- Cover: Overview, Key Features, Architecture/Technology, Business Value, Future Roadmap.
+"""
 
-        content = self._generate_content_with_brain(prompt)
+        content = self._generate_content_with_brain(user_prompt, system_prompt=OFFICE_SYSTEM_PROMPT)
         
         # JSON 파싱
         data = self._parse_json(content)
@@ -158,25 +220,39 @@ CRITICAL: Return ONLY valid JSON. No markdown, no explanations."""
         """Word 문서 생성"""
         title = self._get_title(task_description)
         
-        prompt = f"""You are a professional consultant creating a report.
-Topic: {title}
+        # [Structured Prompt]
+        user_prompt = f"""
+[TASK]
+Create a comprehensive professional report (Word) about: {title}
 
-Context Information (Use this to create content):
+[CONTEXT INFORMATION]
 {context}
 
-Generate a JSON object with 3-4 sections.
-Format:
+[FORMAT REQUIREMENTS]
+Generate a JSON object with 4-6 detailed sections.
+Structure:
 {{
     "title": "Report Title",
     "sections": [
-        {{"heading": "Section 1", "content": "Content for section 1..."}},
-        {{"heading": "Section 2", "content": "Content for section 2..."}}
+        {{"heading": "1. Executive Summary", "content": "High-level overview of the project/topic..."}},
+        {{"heading": "2. Market/Problem Analysis", "content": "Detailed analysis..."}},
+        {{"heading": "3. Solution Architecture", "content": "Technical details..."}},
+        ...
     ]
 }}
 
-CRITICAL: Return ONLY valid JSON. No markdown."""
+[CRITICAL]
+- The main content MUST be in a list under the key "sections".
+- Do NOT use keys like "key_points", "body", or "summary".
+- JSON format only.
 
-        content = self._generate_content_with_brain(prompt)
+[IMPORTANT]
+- Content MUST be in Korean.
+- Use long paragraphs and bullet points (start with '- ').
+- Be professional and thorough.
+"""
+
+        content = self._generate_content_with_brain(user_prompt, system_prompt=OFFICE_SYSTEM_PROMPT)
         data = self._parse_json(content)
         
         if not data or "sections" not in data or not data["sections"]:
@@ -200,25 +276,27 @@ CRITICAL: Return ONLY valid JSON. No markdown."""
         """Excel 생성"""
         title = self._get_title(task_description)
         
-        prompt = f"""You are a data analyst creating a spreadsheet.
-Topic: {title}
+        # [Structured Prompt]
+        user_prompt = f"""
+[TASK]
+Create an Excel spreadsheet with mock data analysis for: {title}
 
-Context Information (Use this to create content):
+[CONTEXT INFORMATION]
 {context}
 
-Generate a JSON object with 5-10 rows of mock data.
-Format:
+[FORMAT REQUIREMENTS]
+Generate a JSON object with 10-15 rows of realistic mock data.
+Structure:
 {{
-    "sheet_name": "Sheet1",
+    "sheet_name": "Analysis_Data",
     "data": [
-        {{"Col1": "Val1", "Col2": "Val2"}},
-        {{"Col1": "Val3", "Col2": "Val4"}}
+        {{"Category": "Metric A", "Value": 100, "Growth": "5%"}},
+        ...
     ]
 }}
+"""
 
-CRITICAL: Return ONLY valid JSON. No markdown."""
-
-        content = self._generate_content_with_brain(prompt)
+        content = self._generate_content_with_brain(user_prompt, system_prompt=OFFICE_SYSTEM_PROMPT)
         data = self._parse_json(content)
         
         if not data or "data" not in data or not data["data"]:
@@ -252,17 +330,7 @@ CRITICAL: Return ONLY valid JSON. No markdown."""
             "message": f"Created PPT, Word, Excel in {output_dir}/"
         }
     
-    def _parse_json(self, content: str) -> dict:
-        """JSON 파싱 시도"""
-        if not content:
-            return {}
-        try:
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-        except json.JSONDecodeError:
-            pass
-        return {}
+
     
     def _get_default_ppt_content(self, title: str) -> dict:
         """기본 PPT 내용 (Brain 실패 시 사용)"""
