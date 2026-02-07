@@ -481,6 +481,7 @@ class Brain:
                         final_formatted_blocks.append("\n".join(block_lines))
                         continue
 
+
                 # 2. Weather Results
                 # {'location': 'Seoul', 'temperature': ...}
                 target_data = inner if "temperature" in inner else data
@@ -498,7 +499,38 @@ class Brain:
                     final_formatted_blocks.append(weather_block)
                     continue
                 
-                # 3. Fallback (Generic Dict)
+                # 3. Execute Command Results (stdout/stderr는 번역하지 않고 원문 유지!)
+                # {'command': 'dir /b', 'stdout': '...', 'stderr': '', 'return_code': 0, ...}
+                target_data = inner if "stdout" in inner else data
+                if "command" in target_data and "stdout" in target_data:
+                    cmd = target_data.get("command", "")
+                    stdout = target_data.get("stdout", "")
+                    stderr = target_data.get("stderr", "")
+                    return_code = target_data.get("return_code", 0)
+                    success = target_data.get("success", True)
+                    platform = target_data.get("platform", "")
+                    
+                    # [CRITICAL] stdout/stderr는 기술적 데이터이므로 번역하면 안됨!
+                    # 파일명, 폴더명, 명령어 결과는 그대로 유지
+                    cmd_block = f"### 💻 **Command Result**\n"
+                    cmd_block += f"```\n$ {cmd}\n```\n"
+                    
+                    if stdout:
+                        # stdout을 코드 블록으로 감싸서 번역 방지
+                        cmd_block += f"**Output:**\n```\n{stdout.strip()}\n```\n"
+                    
+                    if stderr:
+                        cmd_block += f"**Error:**\n```\n{stderr.strip()}\n```\n"
+                    
+                    status_emoji = "✅" if success else "❌"
+                    cmd_block += f"\n{status_emoji} Return Code: {return_code}"
+                    if platform:
+                        cmd_block += f" | Platform: {platform}"
+                    
+                    final_formatted_blocks.append(cmd_block)
+                    continue
+                
+                # 4. Fallback (Generic Dict)
                 fallback_lines = []
                 for k, v in target_data.items():
                     if isinstance(v, (str, int, float, bool)):

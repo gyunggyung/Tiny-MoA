@@ -127,14 +127,38 @@ class TranslationPipeline:
         if not english_response or not english_response.strip():
             return english_response
         
-        # 원래 언어로 번역
+        # [CRITICAL FIX] 코드 블록(```)은 번역하지 않고 원문 유지
+        # 파일명, 명령어 결과, stdout/stderr 등 기술적 데이터 보존을 위함
+        import re
+        
+        # 코드 블록 패턴: ```...``` (멀티라인)
+        code_block_pattern = r'```[\s\S]*?```'
+        code_blocks = re.findall(code_block_pattern, english_response)
+        
+        # 코드 블록을 플레이스홀더로 대체
+        text_to_translate = english_response
+        placeholders = []
+        for i, block in enumerate(code_blocks):
+            placeholder = f"__CODE_BLOCK_{i}__"
+            placeholders.append((placeholder, block))
+            text_to_translate = text_to_translate.replace(block, placeholder, 1)
+        
+        # 코드 블록 제외한 텍스트만 번역
         try:
-            translated = self.translator.translate(
-                english_response,
-                src="en",
-                dest=context.original_lang
-            )
-            logger.info(f"[Translation] en → {context.original_lang}: {english_response[:50]}...")
+            if text_to_translate.strip():
+                translated = self.translator.translate(
+                    text_to_translate,
+                    src="en",
+                    dest=context.original_lang
+                )
+            else:
+                translated = text_to_translate
+            
+            # 코드 블록 복원 (원문 그대로)
+            for placeholder, block in placeholders:
+                translated = translated.replace(placeholder, block)
+            
+            logger.info(f"[Translation] en → {context.original_lang}: {english_response[:50]}... (preserved {len(code_blocks)} code blocks)")
             return translated
         except Exception as e:
             logger.warning(f"원래 언어 번역 실패: {e}")
