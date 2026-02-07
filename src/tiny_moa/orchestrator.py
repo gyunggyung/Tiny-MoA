@@ -867,6 +867,7 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         from tiny_moa.cowork.workers.writer import WriterWorker
         from tiny_moa.cowork.workers.brain_worker import BrainWorker
         from tiny_moa.cowork.workers.tool_worker import ToolWorker
+        from tiny_moa.cowork.workers.office_worker import OfficeWorker
         from rich.live import Live
 
         # [Fix] Keep reference to handler for cleanup
@@ -899,6 +900,7 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         writer = WriterWorker("Writer-1", logger, self.brain, file_skill)
         brain_worker = BrainWorker("Brain-1", logger, self.brain)
         tool_worker = ToolWorker("Tool-1", logger, self)
+        office_worker = OfficeWorker("Office-1", logger, self)
 
         # 0. Intelligent Routing & Fast Track (Optimization)
         # Check if the task is simple (Tool or Direct) using Brain's router
@@ -927,6 +929,16 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
         # ?가 2개 이상이거나, 연결어가 2개 이상이면 복잡한 쿼리로 간주
         complexity_score = sum(user_goal.count(sig) for sig in complexity_signals)
         is_complex_query = (len(user_goal) > 60) or (complexity_score >= 2)
+        
+        # [Office Document Detection]
+        # Office 문서 생성 요청은 항상 복잡한 쿼리로 처리 (Brain이 내용 생성해야 함)
+        office_keywords = ["ppt", "powerpoint", "발표", "프레젠테이션", "슬라이드",
+                          "word", "docx", "보고서", "문서", "제안서",
+                          "excel", "xlsx", "엑셀", "스프레드시트", "통계"]
+        is_office_request = any(kw in user_goal.lower() for kw in office_keywords)
+        if is_office_request:
+            is_complex_query = True
+            logger.info("Office document request detected. Forcing LLM Planner.")
         
         if is_complex_query:
             logger.info(f"Complex query detected (Length: {len(user_goal)}, Score: {complexity_score}). Enforcing LLM Planner.")
@@ -1066,7 +1078,7 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
             # 'brain' and 'writer' usually depend on previous results.
             
             parallelizable = [t for t in all_tasks if t.agent_type in ["tool", "rag"]]
-            sequential = [t for t in all_tasks if t.agent_type in ["brain", "writer"]]
+            sequential = [t for t in all_tasks if t.agent_type in ["brain", "writer", "office"]]
             
             # [FIX] Hybrid 모드에서는 순차 태스크(brain)를 먼저 실행
             is_hybrid_mode = rag_context and needs_tool
@@ -1123,6 +1135,13 @@ Return ONLY the JSON arguments (e.g. {{"location": "Seoul"}} or {{"command": "py
                         res = researcher.execute(task.description)
                     elif agent_type == "writer":
                         res = writer.execute(task.description, history=history, user_goal=user_goal)
+                    elif agent_type == "office":
+                        # Office 문서 생성 (PPT, Word, Excel)
+                        res = office_worker.execute(task.description)
+                        if use_tui:
+                            if isinstance(res, dict) and res.get("success"):
+                                dashboard.add_log(f"Office: Created {res.get('path', 'document')}", "Office")
+                            live.update(dashboard.generate_layout())
                     else:
                         res = brain_worker.execute(task.description, history=history)
                     

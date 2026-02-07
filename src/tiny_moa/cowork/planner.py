@@ -27,6 +27,7 @@ AGENTS:
 1. 'tool': Use for getting data, running commands, checking versions, or checking weather.
 2. 'rag': Use ONLY for reading LOCAL files mentioned in context.
 3. 'brain': Use for summarizing, explaining concepts, or reasoning.
+4. 'office': Use for creating documents (PPT, Word, Excel). ALWAYS use this for presentations, reports, spreadsheets.
 
 RULES for 'tool' tasks (Strict Format):
 - "version" / "버전" -> "execute_command: <command> --version"
@@ -37,6 +38,16 @@ RULES for 'tool' tasks (Strict Format):
 - **CRITICAL**: DO NOT use prefixes like "tool:", "command:", "도구:" inside description.
 - **CRITICAL**: DO NOT TRANSLATE FOLDER NAMES or FILE NAMES.
 - **CRITICAL**: If multiple requests, generated tasks for ALL parts.
+
+RULES for 'office' tasks (Document Creation) - VERY IMPORTANT:
+- "ppt", "powerpoint", "발표", "프레젠테이션", "슬라이드" -> Agent: office
+- "word", "docx", "보고서", "문서", "제안서" -> Agent: office
+- "excel", "xlsx", "엑셀", "스프레드시트", "통계", "표" -> Agent: office
+- Description format: "create_ppt: <title> | <EXACT_FOLDER_NAME>" or "create_word: <title> | <EXACT_FOLDER_NAME>" or "create_excel: <topic> | <EXACT_FOLDER_NAME>"
+- If user requests multiple document types, create a SEPARATE task for EACH type.
+- **CRITICAL**: COPY THE EXACT FOLDER NAME FROM USER INPUT. DO NOT TRANSLATE OR MODIFY IT.
+  - Example: User says "TestReports 폴더" -> Use "TestReports" (NOT "Reports")
+  - Example: User says "Tiny-MoA-Korean-Reports" -> Use "Tiny-MoA-Korean-Reports" exactly
 
 RULES for 'brain' tasks:
 - "explain", "idea", "concept", "설명", "개념", "요약" -> Description: "Explain <topic>" (Agent: brain)
@@ -57,6 +68,14 @@ EXAMPLE OUTPUT:
   {{"description": "get_weather: Seoul", "agent": "tool"}},
   {{"description": "Compare weather of London and Seoul", "agent": "brain"}},
   {{"description": "search_news: Anthropic", "agent": "tool"}}
+]
+
+EXAMPLE INPUT: "Tiny-MoA 투자 제안서를 TestReports 폴더에 만들어줘. PPT, Word, Excel 모두 포함해."
+EXAMPLE OUTPUT:
+[
+  {{"description": "create_ppt: Tiny-MoA 투자 제안서 | TestReports", "agent": "office"}},
+  {{"description": "create_word: Tiny-MoA 투자 제안서 | TestReports", "agent": "office"}},
+  {{"description": "create_excel: Tiny-MoA 통계 | TestReports", "agent": "office"}}
 ]
 
 Context:
@@ -84,15 +103,24 @@ Return ONLY the JSON list. No markdown."""
                 json_str = cleaned[start:end]
                 plan = json.loads(json_str)
 
-                # [Safety Fix] Force 'tool' agent for known tool commands
-                # The 1.2B model sometimes assigns 'agent': 'brain' to tool commands, causing hallucinations.
-                # We override this by checking the description prefix.
+                # [Safety Fix] Force correct agent for known command prefixes
+                # The 1.2B model sometimes assigns wrong agents.
                 tool_prefixes = ["execute_command", "search_news", "search_web", "get_weather"]
+                office_prefixes = ["create_ppt", "create_word", "create_excel"]
+                
                 for task in plan:
                     desc_lower = task.get("description", "").lower().strip()
+                    
+                    # Force tool agent
                     for prefix in tool_prefixes:
                         if desc_lower.startswith(prefix):
                             task["agent"] = "tool"
+                            break
+                    
+                    # Force office agent
+                    for prefix in office_prefixes:
+                        if desc_lower.startswith(prefix):
+                            task["agent"] = "office"
                             break
                 
                 return plan
@@ -105,4 +133,3 @@ Return ONLY the JSON list. No markdown."""
         except Exception as e:
             print(f"[Planner] Error in planning: {e}")
             return [{"description": user_goal, "agent": "brain"}] # Fallback
-

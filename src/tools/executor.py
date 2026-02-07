@@ -435,6 +435,84 @@ def get_current_time(timezone: str = "UTC", **kwargs) -> dict[str, Any]:
         }
 
 
+# =============================================================================
+# Office 문서 생성 도구
+# =============================================================================
+
+def create_ppt(title: str, subtitle: str = "", slides: list = None, 
+               output_path: str = "presentation.pptx", output_dir: str = "output", **kwargs) -> dict[str, Any]:
+    """
+    PowerPoint 프레젠테이션 생성
+    
+    Args:
+        title: 발표 제목
+        subtitle: 부제목
+        slides: 슬라이드 데이터 [{"title": "...", "content": ["항목1", "항목2"]}]
+        output_path: 파일명
+        output_dir: 출력 폴더
+    """
+    try:
+        from office.agent import OfficeAgent
+        agent = OfficeAgent(output_dir=output_dir)
+        result = agent.create_presentation(
+            title=title,
+            subtitle=subtitle,
+            slides=slides or [],
+            output_path=output_path
+        )
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def create_word(title: str, sections: list = None, 
+                output_path: str = "report.docx", output_dir: str = "output", **kwargs) -> dict[str, Any]:
+    """
+    Word 보고서 생성
+    
+    Args:
+        title: 문서 제목
+        sections: 섹션 목록 [{"heading": "...", "content": "..."}]
+        output_path: 파일명
+        output_dir: 출력 폴더
+    """
+    try:
+        from office.agent import OfficeAgent
+        agent = OfficeAgent(output_dir=output_dir)
+        result = agent.create_word_report(
+            title=title,
+            sections=sections or [],
+            output_path=output_path
+        )
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def create_excel(data: list, output_path: str = "data.xlsx", 
+                 sheet_name: str = "Data", output_dir: str = "output", **kwargs) -> dict[str, Any]:
+    """
+    Excel 스프레드시트 생성
+    
+    Args:
+        data: 데이터 목록 [{"col1": "val1", "col2": "val2"}, ...]
+        output_path: 파일명
+        sheet_name: 시트 이름
+        output_dir: 출력 폴더
+    """
+    try:
+        from office.agent import OfficeAgent
+        agent = OfficeAgent(output_dir=output_dir)
+        result = agent.create_excel(
+            data=data or [],
+            output_path=output_path,
+            sheet_name=sheet_name
+        )
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 class ToolExecutor:
     """Tool 실행 관리자"""
     
@@ -449,6 +527,10 @@ class ToolExecutor:
             "calculate": calculate,
             "get_current_time": get_current_time,
             "execute_command": execute_command,
+            # Office 도구
+            "create_ppt": create_ppt,
+            "create_word": create_word,
+            "create_excel": create_excel,
         }
     
     def execute(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
