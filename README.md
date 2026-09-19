@@ -72,7 +72,7 @@ huggingface-cli download LiquidAI/LFM2.5-1.2B-Thinking-GGUF \
 
 # Reasoner (Falcon-R-0.6B)
 huggingface-cli download tiiuae/Falcon-H1-Tiny-R-0.6B-GGUF \
-    --include "*Q4_K_M.gguf" --local-dir ./models/reasoner
+    --include "*Q4_0.gguf" --local-dir ./models/reasoner
 ```
 
 ---
